@@ -1,0 +1,19 @@
+[project]
+name = "llm-patch-driver"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "RealNickSheero", email = "nick@tensorsense.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "glom>=24.11.0",
+    "pydantic>=2.11.7",
+    "sortedcontainers>=2.4.0",
+    "spacy>=3.8.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
