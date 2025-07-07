@@ -15,8 +15,11 @@ from llm_patch_driver.patch_schemas.string_patch import StrPatch, ReplaceOp, Del
 from llm_patch_driver.patch_schemas.json_patch import JsonPatch
 from llm_patch_driver.patch_target.target import PatchTarget
 from llm_patch_driver.tools.tools import LLMTool
-from llm_patch_driver.llm.types import ToolCallResponse, ToolCallRequest
-from llm_patch_driver.llm.wrapper import LLMClientWrapper
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from llm_patch_driver.llm.types import ToolCallResponse, ToolCallRequest
+    from llm_patch_driver.llm.wrapper import LLMClientWrapper
 
 from .prompts import REQUEST_PATCH_PROMPT, STR_ANNOTATION_TEMPLATE, JSON_ANNOTATION_TEMPLATE, ANNOTATION_PLACEHOLDER, STR_PATCH_SYNTAX, PATCHING_LOOP_SYSTEM_PROMPT, ERROR_TEMPLATE, JSON_PATCH_SYNTAX
 
@@ -117,28 +120,25 @@ class PatchDriver(Generic[T]):
                     id_map = parent._map
 
                     for patch in v.patches:
-                        
-                        match patch:
-                            case StrPatch():
-                                if not patch.tids:
-                                    raise ValueError("Patch must contain at least one tid")
 
-                                for line, sent in patch._parsed_tids:
-                                    if line not in id_map:
-                                        raise ValueError(f"Line {line} does not exist")
-                                    
-                                    if sent not in id_map[line]:
-                                        raise ValueError(f"Sentence {sent} does not exist in line {line}")
-                            
-                            case JsonPatch():
-                                if not patch.a_id:
-                                    raise ValueError("Patch must contain an attribute id")
-                                
-                                if patch.a_id not in id_map:
-                                    raise ValueError(f"Attribute {patch.a_id} does not exist")
-                                    
-                            case _:
-                                raise ValueError("Unsupported patch type")
+                        if isinstance(patch, StrPatch):
+                            if not patch.tids:
+                                raise ValueError("Patch must contain at least one tid")
+
+                            for line, sent in patch._parsed_tids:
+                                if line not in id_map:
+                                    raise ValueError(f"Line {line} does not exist")
+
+                                if sent not in id_map[line]:
+                                    raise ValueError(f"Sentence {sent} does not exist in line {line}")
+                        elif isinstance(patch, JsonPatch):
+                            if not patch.a_id:
+                                raise ValueError("Patch must contain an attribute id")
+
+                            if patch.a_id not in id_map:
+                                raise ValueError(f"Attribute {patch.a_id} does not exist")
+                        else:
+                            raise ValueError("Unsupported patch type")
                     return v
                         
             self._cached_patch_schema = cast(Type[PatchBundle], ModdedPatchBundle)
