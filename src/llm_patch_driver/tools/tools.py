@@ -4,8 +4,7 @@ from pydantic import Field, BaseModel
 from typing import List, TYPE_CHECKING, Type, TypeVar, Optional
 from abc import ABC, abstractmethod
 
-if TYPE_CHECKING:
-    from llm_patch_driver.driver.driver import PatchDriver
+from llm_patch_driver.driver.driver import PatchDriver
 from llm_patch_driver.patch_schemas.string_patch import StrPatch
 from llm_patch_driver.patch_schemas.json_patch import JsonPatch
 from llm_patch_driver.tools.tool_call_schemas import ResponsesToolParam, ChatCompletionToolParam, FunctionData
