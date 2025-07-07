@@ -17,7 +17,8 @@ RESPONSES_API_MAP = {
         "type_value": "function_call",
         "id_path": "call_id",
         "name_path": "name",
-        "arguments_path": "arguments"
+        "arguments_path": "arguments",
+        "append": True
     },
     "tool_call_response": {
         "type_kw": "type",
@@ -48,7 +49,8 @@ COMPLETION_API_MAP = {
         "type_value": "function",
         "id_path": "id",
         "name_path": "function.name",
-        "arguments_path": "function.arguments"
+        "arguments_path": "function.arguments",
+        "append": False
     },
     "tool_call_response": {
         "type_kw": "role",

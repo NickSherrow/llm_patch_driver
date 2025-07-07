@@ -234,3 +234,80 @@ JSON_ANNOTATION_TEMPLATE = """
     This version of the JSON is the current state of the object.
 </current_state_of_the_text>
     """
+
+
+TRY_AGAIN_PROMPT = """
+<current_stage_of_pipeline>
+    The response was not approved by the pipeline. It needs to be fixed.
+</current_stage_of_pipeline>
+<negative_feedback>
+    Your response is not correct. Below you'll find what exactly is wrong. Read the error description carefully and fix the response.
+    <error_description>
+        {error_description}
+    </error_description>
+</negative_feedback>
+<instructions>
+    1. Read the error description carefully.
+    2. Generate the response again, but this time make sure that you fix the error.
+    3. Important: you must generate the entire response again. Not just a fixed part of it.
+</instructions>
+"""
+
+FIX_JSON_PROMPT = """
+<error>
+    The previous response was not approved by the pipeline. See the error description below. It needs to be fixed. Generate an RFC 6902 patch.
+</error>
+
+<handling_error>
+    1. You generated a JSON object. It failed to pass the validation, and/or parsing.
+    2. This JSON object could be fixed by applying a RFC 6902 patch.
+    3. Your job is to return the patch.
+    4. This patch will be applied automatically by patch_json function.
+    5. Below you will see the error description, the current state of the object, and the schema that was used to validate the object.
+</handling_error>
+
+<current_state_of_the_object>
+    {state_of_the_object}
+</current_state_of_the_object>
+
+<detected_problem>
+    {error_description}
+</detected_problem>
+
+<schema_that_was_used_to_validate_the_object>
+    {schema}
+</schema_that_was_used_to_validate_the_object>
+"""
+
+CORRUPTED_PATCH_PROMPT = """
+<error>
+    The previous JSON patch was not approved by the pipeline. It needs to be fixed.
+</error>
+
+<handling_error>
+    1. You generated a JSON patch. The application of the patch raised an error.
+    2. Analyze the error description and return the new patch.
+</handling_error>
+
+<detected_problem>
+    {detected_problem}
+</detected_problem>
+"""
+
+ORIGINAL_STATE_PROMPT = """
+<original_state_of_the_object description="This text shows the original state of the target object before any tool calls.">
+    {original_state_of_the_object}
+</original_state_of_the_object>
+"""
+
+OBJ_STATE_PROMPT = """
+<current_state_of_the_object description="This text shows the current annotated state of the target object after all the previous tool calls.">
+    {current_state_of_the_object}
+</current_state_of_the_object>
+"""
+
+NO_TOOL_CALLS_PROMPT = """
+<error>
+    Please, use tools to generate the response. Response without tool calls is not allowed for this stage.
+</error>
+"""
