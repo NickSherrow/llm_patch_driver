@@ -1,0 +1,6 @@
+---
+description: How to run debugging code
+alwaysApply: false
+---
+
+If you want to run a debugging code to test some behavior, you never do that by passing code to CLI. You have a file called 'tests/debugging.py'. Use it for your experiments with several behaviors.

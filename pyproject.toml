@@ -8,8 +8,12 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "arize-phoenix-otel>=0.12.1",
     "glom>=24.11.0",
+    "jsonpatch>=1.33",
+    "nanoid>=2.0.0",
     "pydantic>=2.11.7",
+    "rich>=14.0.0",
     "sortedcontainers>=2.4.0",
     "spacy>=3.8.7",
 ]
@@ -17,3 +21,16 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "dotenv>=0.9.9",
+    "email-validator>=2.2.0",
+    "llm-patch-driver",
+    "openai>=1.93.2",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=0.23.6",
+]
+
+[tool.uv.sources]
+llm-patch-driver = { workspace = true }

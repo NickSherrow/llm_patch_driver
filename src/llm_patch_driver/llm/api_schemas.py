@@ -9,8 +9,8 @@ RESPONSES_API_MAP = {
     },
     "output": {
         "parsed_object_path": "output_parsed",
-        "tool_calls_path": ('output', Iter().filter(M.type == 'function_call').all()), #type: ignore[attr-defined]
-        "message_path": ('output', Iter().first(M.type == 'message')) #type: ignore[attr-defined]
+        "tool_calls_path": ('output', Iter().filter(lambda x: x.get("type") == 'function_call').all()),  # type: ignore[arg-type]
+        "message_path": ('output', Iter().first(lambda x: x.get("type") == 'message'))  # type: ignore[arg-type]
     },
     "tool_call_request": {
         "type_path": "type",
@@ -41,8 +41,8 @@ COMPLETION_API_MAP = {
     },
     "output": {
         "parsed_object_path": "parsed",
-        "tool_calls_path": "choices.*.message.tool_calls",
-        "message_path": "choices.*.message",
+        "tool_calls_path": "choices.0.message.tool_calls",
+        "message_path": "choices.0.message",
     },
     "tool_call_request": {
         "type_path": "type",
@@ -55,7 +55,7 @@ COMPLETION_API_MAP = {
     "tool_call_response": {
         "type_kw": "role",
         "type_value": "tool",
-        "id_kw": "call_tool_call_id",
+        "id_kw": "tool_call_id",
         "output_kw": "content"
     },
     "message": {

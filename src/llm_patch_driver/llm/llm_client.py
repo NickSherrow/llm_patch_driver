@@ -1,19 +1,33 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
-from typing import Any, Callable, List, Type, Optional, TypedDict, Tuple, TypeVar
+import logging
+import inspect
+
 from functools import partial, partialmethod
+from typing import Any, Callable, List, Type, Optional, TypedDict, Tuple, TypeVar
+
+from pydantic import BaseModel
 from glom import glom, SKIP, Iter, M, T
 
 from llm_patch_driver.llm.api_schemas import RESPONSES_API_MAP, COMPLETION_API_MAP
 from llm_patch_driver.llm.maps import ApiLLMMap, ToolCallRequestMap, ToolCallResponseMap, MessageMap
 from llm_patch_driver.llm.types import ToolCallRequest, ToolCallResponse
 from llm_patch_driver.config import config
+from llm_patch_driver.logging import log_wrapper, ArgSpec, OutputFormat
 
 U = TypeVar("U", bound=BaseModel)
 
+collector = config.build_log_collector(__name__)
+
 class LLMClientWrapper:
-    """Wrapper for LLM clients"""
+    """Wrapper for LLM clients
+    
+    Args:
+        llm_request_message: Function that requests a message from the LLM
+        llm_request_object: Function that requests an object from the LLM
+        model_args: Arguments to pass to the LLM
+        custom_map: Custom map to use for the LLM
+    """
 
     def __init__(self, 
                  llm_request_message: Callable, 
@@ -21,8 +35,8 @@ class LLMClientWrapper:
                  model_args: dict, 
                  custom_map: Optional[ApiLLMMap] = None):
         
-        self._create = partial(llm_request_message, **model_args)
-        self._parse = partial(llm_request_object, **model_args)
+        self._create = (partial(llm_request_message, **model_args), inspect.iscoroutinefunction(llm_request_message))
+        self._parse = (partial(llm_request_object, **model_args), inspect.iscoroutinefunction(llm_request_object))
         
         match config.api_type:
             case "responses":
@@ -40,6 +54,15 @@ class LLMClientWrapper:
             case _:
                 raise ValueError(f"Invalid api_type: {config.api_type}")
 
+    @log_wrapper(
+        span_kind="llm",
+        log_output=OutputFormat(rich_console=None, logger_level="INFO", otel_output=True),
+        log_input=[
+            ArgSpec("messages", None, None, "input", None),
+            ArgSpec("tools", None, None, "metadata", None),
+            ArgSpec("system_prompt", None, None, "metadata", None),
+        ],
+    )
     async def create_message(self,
                      messages: List[Any], 
                      tools: Optional[List[dict]] = None, 
@@ -52,9 +75,15 @@ class LLMClientWrapper:
         model_params = self.api_map["input"]["system_prompt_dict"](system_prompt) if system_prompt else {}
         model_params.setdefault(self.api_map["input"]["messages_kw"], []).extend(messages) 
         model_params.setdefault(self.api_map["input"]["tools_kw"], []).extend(tools)
-
         # get response
-        llm_response = await self._create(**model_params)
+
+        match self._create:
+            case (func, True):
+                llm_response = await func(**model_params)
+            case (func, False):
+                llm_response = func(**model_params)
+            case _:
+                raise ValueError("Invalid function type")
 
         # parse response with glom
         tool_calls = glom(llm_response, (self.api_map["output"]["tool_calls_path"], self._parse_tool_calls))
@@ -62,6 +91,15 @@ class LLMClientWrapper:
 
         return tool_calls, output_message
     
+    @log_wrapper(
+        log_output=OutputFormat(rich_console=None, logger_level="INFO", otel_output=True),
+        log_input=[
+            ArgSpec("messages", None, None, "input", None),
+            ArgSpec("schema", None, None, "metadata", None),
+            ArgSpec("system_prompt", None, None, "metadata", None),
+        ],
+        span_kind="llm"
+    )
     async def create_object(self, 
                     messages: List[Any], 
                     schema: Type[U], 
@@ -76,7 +114,13 @@ class LLMClientWrapper:
         model_params[self.api_map["input"]["schema_kw"]] = schema
 
         # parse response
-        llm_response = await self._parse(**model_params)
+        match self._parse:
+            case (func, True):
+                llm_response = await func(**model_params)
+            case (func, False):
+                llm_response = func(**model_params)
+            case _:
+                raise ValueError("Invalid function type")
 
         # parse response with glom
         parsed_object = glom(llm_response, self.api_map["output"]["parsed_object_path"])
@@ -96,7 +140,7 @@ class LLMClientWrapper:
             "arguments": self.api_map["tool_call_request"]["arguments_path"]
         }
 
-        return [glom(tool_call, spec) for tool_call in tool_calls]
+        return [ToolCallRequest(**glom(tool_call, spec)) for tool_call in tool_calls]
     
     def to_llm_message(self, content: str|dict|list, role: str) -> dict:
         """Normalize messages to the format expected by the LLM"""
@@ -107,11 +151,11 @@ class LLMClientWrapper:
         return {role_kw: role, content_kw: content}
     
     def format_tool_call_results(self, 
-                                 tool_calls: List[Tuple[ToolCallRequest, ToolCallResponse]], 
-                                 message: dict | None = None) -> list:
+                                 tool_calls: List[Tuple[ToolCallRequest, ToolCallResponse]]
+                                 ) -> list:
         """Format tool call results to the format expected by the LLM"""
 
-        message_list = [] if message is None else [message]
+        message_list = []
         append_request = self.api_map["tool_call_request"]["append"]
 
         for tool_call in tool_calls:

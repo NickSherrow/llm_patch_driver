@@ -1,26 +1,29 @@
 from __future__ import annotations
 
+import inspect
+import json
+import jsonpatch
+from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Union, cast, Type, Any, Callable, TypeVar, Generic, Coroutine
 
 import spacy
-import inspect
-import json
-import jsonpatch  # type: ignore[import-untyped]
-
 from pydantic import BaseModel, Field, model_validator, PrivateAttr, ValidationError
 from sortedcontainers import SortedDict
-from dataclasses import dataclass
 
-from llm_patch_driver.patch_schemas.string_patch import StrPatch, ReplaceOp, DeleteOp, InsertAfterOp
+from llm_patch_driver.llm.base_adapter import BaseApiAdapter
+from llm_patch_driver.llm.types import ToolCallRequest, ToolCallResponse, Message
+from llm_patch_driver.patch_schemas.base_patch import PatchBundle, BasePatch
 from llm_patch_driver.patch_schemas.json_patch import JsonPatch
+from llm_patch_driver.patch_schemas.string_patch import ReplaceOp, DeleteOp, InsertAfterOp, StrPatch
 from llm_patch_driver.patch_target.target import PatchTarget
 from llm_patch_driver.tools.tools import LLMTool
-from llm_patch_driver.llm.types import ToolCallResponse, ToolCallRequest
-from llm_patch_driver.llm.wrapper import LLMClientWrapper
-
-from .prompts import REQUEST_PATCH_PROMPT, STR_ANNOTATION_TEMPLATE, JSON_ANNOTATION_TEMPLATE, ANNOTATION_PLACEHOLDER, STR_PATCH_SYNTAX, PATCHING_LOOP_SYSTEM_PROMPT, ERROR_TEMPLATE, JSON_PATCH_SYNTAX
+from llm_patch_driver.driver.annotation_helpers import build_map, map_to_annotated_text, map_to_original_text, build_json_annotation_and_map
+from llm_patch_driver.driver.prompts import REQUEST_PATCH_PROMPT, STR_ANNOTATION_TEMPLATE, JSON_ANNOTATION_TEMPLATE, ANNOTATION_PLACEHOLDER, STR_PATCH_SYNTAX, PATCHING_LOOP_SYSTEM_PROMPT, ERROR_TEMPLATE, JSON_PATCH_SYNTAX
+from llm_patch_driver.driver.sentencizer import NLP
+from llm_patch_driver.config import config
 
 T = TypeVar("T", bound=Any)
+U = TypeVar("U", bound=BaseModel)
 
 # Usage:
 # 1. put the object that needs to be patched into the PatchTarget
@@ -36,13 +39,6 @@ T = TypeVar("T", bound=Any)
 # Limitations:
 # - object body must be a string
 
-try:
-    _NLP = spacy.load("en_core_web_sm")
-except OSError:
-    _NLP = spacy.blank("en")
-    _NLP.add_pipe("sentencizer")
-
-
 # --------------------------------------------------------------------- #
 # DRIVER CLASS
 # --------------------------------------------------------------------- #
@@ -50,12 +46,19 @@ except OSError:
 class PatchDriver(Generic[T]):
     """Maintains the sentence map and annotated view; applies patch bundles."""
 
-    client: LLMClientWrapper
-
     def __init__(self, 
-                 target_object: PatchTarget[T], 
+                 target_object: PatchTarget[T],
+                 create_method: Callable,
+                 parse_method: Callable, 
+                 model_args: dict,
+                 api_adapter: BaseApiAdapter,
                  current_error: str | None = None,
                  tools: List[Type[LLMTool]] = []):
+
+        self._create_method = create_method
+        self._parse_method = parse_method
+        self._model_args = model_args
+        self._api_adapter = api_adapter
 
         self._target_object = target_object
         self._current_error = current_error
@@ -70,19 +73,95 @@ class PatchDriver(Generic[T]):
                 self._patch_type = StrPatch
                 self._patch_syntax = STR_PATCH_SYNTAX
                 self._annotation_template = STR_ANNOTATION_TEMPLATE
-                self._map = self._build_map(target_object.content)
-                self._annotated: str = self._build_annotation(self._map)
+                self._map = build_map(target_object.content)
+                self._annotated: str = map_to_annotated_text(self._map)
 
             case _:
                 self._patch_type = JsonPatch
                 self._patch_syntax = JSON_PATCH_SYNTAX
                 self._annotation_template = JSON_ANNOTATION_TEMPLATE
-                self._annotated, self._map = self._build_json_annotation_and_map(target_object.content)
+                self._annotated, self._map = build_json_annotation_and_map(target_object.content)
 
         driver_tools = self._build_tools() + tools
 
         for tool in driver_tools:
             self.bind_tool(tool)
+
+    # --------------------------------------------------------------------- #
+    # LLM API methods
+    # --------------------------------------------------------------------- #
+    
+    async def create_message(self,
+                           messages: List[Message], 
+                           tools: Optional[List[dict]] = None, 
+                           system_prompt: Optional[str] = None
+                           ) -> tuple[List[ToolCallRequest], Message]:
+        """Create a message from the LLM"""
+        
+        # Format inputs using the adapter
+        model_params = self._api_adapter.format_llm_call_input(
+            messages=messages,
+            tools=tools,
+            system_prompt=system_prompt
+        )
+        
+        # Add model args
+        model_params.update(self._model_args)
+        
+        # Make API call
+        if inspect.iscoroutinefunction(self._create_method):
+            raw_response = await self._create_method(**model_params)
+        else:
+            raw_response = self._create_method(**model_params)
+        
+        # Parse response using adapter
+        message = self._api_adapter.parse_llm_output(raw_response)
+        
+        return message.tool_calls or [], message
+    
+    async def create_object(self, 
+                          messages: List[Message], 
+                          schema: Type[U], 
+                          system_prompt: Optional[str] = None
+                          ) -> U:
+        """Create an object with the LLM"""
+        
+        # Format inputs using the adapter
+        model_params = self._api_adapter.format_llm_call_input(
+            messages=messages,
+            schema=schema,
+            system_prompt=system_prompt
+        )
+        
+        # Add model args
+        model_params.update(self._model_args)
+        
+        # Make API call
+        if inspect.iscoroutinefunction(self._parse_method):
+            raw_response = await self._parse_method(**model_params)
+        else:
+            raw_response = self._parse_method(**model_params)
+        
+        # Parse response using adapter
+        message = self._api_adapter.parse_llm_output(raw_response)
+        
+        # Return the attached object (structured output)
+        if message.attached_object is None:
+            raise ValueError("No structured output received from LLM")
+        
+        return cast(U, message.attached_object)
+
+    def to_llm_message(self, content: str|dict|list, role: str) -> Message:
+        """Create a Message object"""
+        return Message(role=role, content=content)
+
+    def format_tool_call_results(self, 
+                                tool_calls: List[tuple[ToolCallRequest, ToolCallResponse]]
+                                ) -> List[dict]:
+        """Format tool call results using the adapter"""
+        # Extract just the ToolCallResponse objects for the adapter
+        responses = [response for _, response in tool_calls]
+        return self._api_adapter.format_tool_results(responses)
 
     # --------------------------------------------------------------------- #
     # core public API
@@ -112,33 +191,16 @@ class PatchDriver(Generic[T]):
 
                 __doc__ = f"Patch bundle. Syntax: {parent._patch_syntax}"
 
+                def model_post_init(self, __context):
+                    self.patches = parent._patch_type.bundle_builder(self.patches)
+
                 @model_validator(mode="after")
                 def _check_ids(cls, v):
                     id_map = parent._map
 
                     for patch in v.patches:
-                        
-                        match patch:
-                            case StrPatch():
-                                if not patch.tids:
-                                    raise ValueError("Patch must contain at least one tid")
+                        patch.validate_map(id_map)
 
-                                for line, sent in patch._parsed_tids:
-                                    if line not in id_map:
-                                        raise ValueError(f"Line {line} does not exist")
-                                    
-                                    if sent not in id_map[line]:
-                                        raise ValueError(f"Sentence {sent} does not exist in line {line}")
-                            
-                            case JsonPatch():
-                                if not patch.a_id:
-                                    raise ValueError("Patch must contain an attribute id")
-                                
-                                if patch.a_id not in id_map:
-                                    raise ValueError(f"Attribute {patch.a_id} does not exist")
-                                    
-                            case _:
-                                raise ValueError("Unsupported patch type")
                     return v
                         
             self._cached_patch_schema = cast(Type[PatchBundle], ModdedPatchBundle)
@@ -155,7 +217,7 @@ class PatchDriver(Generic[T]):
         # - continue until the error is fixed
 
         loop_prompt = PATCHING_LOOP_SYSTEM_PROMPT.format(patch_syntax=self._patch_syntax)
-        messages = message_history + [self.client.to_llm_message(loop_prompt, "system")]
+        messages = message_history + [self.to_llm_message(loop_prompt, "system")]
         state_id = 0
 
         while self._current_error:
@@ -163,14 +225,14 @@ class PatchDriver(Generic[T]):
             annotated_state = self._annotation_template.format(text=self._annotated)
             temp_err_msg = ERROR_TEMPLATE.format(state_id=state_id, error_message=self._current_error, annotated_state=annotated_state)
 
-            tool_calls, message = await self.client.create_message(
-                messages=messages + [self.client.to_llm_message(temp_err_msg, "system")], 
+            tool_calls, message = await self.create_message(
+                messages=messages + [self.to_llm_message(temp_err_msg, "system")], 
                 tools=self._tools
             )
 
             # remove current state and keep only error message in the message history
             perm_err_msg = ERROR_TEMPLATE.format(state_id=state_id, error_message=self._current_error, annotated_state=ANNOTATION_PLACEHOLDER)
-            messages.extend([self.client.to_llm_message(perm_err_msg, "system"), message])
+            messages.extend([self.to_llm_message(perm_err_msg, "system"), message])
 
             state_id += 1
 
@@ -181,21 +243,15 @@ class PatchDriver(Generic[T]):
 
                 try:
                     tool_args = json.loads(tool_call.arguments)
-                    raw_tool_response = await tool_func(**tool_args)(patch_driver=self)
+                    raw_tool_response = await tool_func(**tool_args)()
 
                 except Exception as e:
                     raise ValueError(f"Error calling tool {tool_call.name}: {e}") from e
 
-                tool_response = {
-                    "type": tool_call.type,
-                    "id": tool_call.id,
-                    "content": raw_tool_response
-                }
-
-                raw_tool_data.append((tool_call, tool_response))
+                raw_tool_data.append((tool_call, ToolCallResponse(request=tool_call, type=tool_call.type, id=tool_call.id, output=raw_tool_response)))
             
             # patch driver doesn't know what tool calling API is being used, so we format outputs inside the client wrapper
-            formatted_tool_data = self.client.format_tool_call_results(raw_tool_data, message)
+            formatted_tool_data = self.format_tool_call_results(raw_tool_data)
             messages.extend(formatted_tool_data)
 
             # run validation to decide if we should continue the loop
@@ -210,9 +266,9 @@ class PatchDriver(Generic[T]):
 
         template = REQUEST_PATCH_PROMPT + "\n" + self._patch_syntax
         prompt = template.format(query=query, context=context, text=self._annotated)
-        patch = await self.client.create_object(
+        patch = await self.create_object(
             schema=self.patch_schema, 
-            messages=[self.client.to_llm_message(prompt, "system")]
+            messages=[self.to_llm_message(prompt, "system")]
         )
         
         return patch
@@ -220,21 +276,19 @@ class PatchDriver(Generic[T]):
     async def apply_patch_bundle(self, bundle: PatchBundle):
         """Mutates internal map with *bundle* and refreshes the annotation."""
 
-        sorted_patches = self._sort_patches(bundle.patches)
-
-        for patch in sorted_patches:
+        for patch in bundle.patches:
             self._apply_patch(patch)
 
         match self._patch_type.__name__:
 
             case StrPatch.__name__:
                 # string patches modify the map so we update the target object and generate a new annotation
-                self._target_object.content = self._assemble_text()
-                self._annotated = self._build_annotation(self._map)
+                self._target_object.content = map_to_original_text(self._map)
+                self._annotated = map_to_annotated_text(self._map)
 
             case JsonPatch.__name__:
                 # json patches modify the object directly but we need both new map and annotation
-                self._annotated, self._map = self._build_json_annotation_and_map(self._target_object.content)
+                self._annotated, self._map = build_json_annotation_and_map(self._target_object.content)
 
     def bind_tool(self, tool: Type[LLMTool]):
         """Add a tool to the patch driver."""
@@ -249,101 +303,17 @@ class PatchDriver(Generic[T]):
 
             case StrPatch.__name__:
                 self._target_object.content = self._original_state
-                self._map = self._build_map(self._original_state)
-                self._annotated = self._build_annotation(self._map)
+                self._map = build_map(self._original_state)
+                self._annotated = map_to_annotated_text(self._map)
 
             case JsonPatch.__name__:
                 self._target_object.content = self._original_state
-                self._annotated, self._map = self._build_json_annotation_and_map(self._target_object.content)
+                self._annotated, self._map = build_json_annotation_and_map(self._target_object.content)
 
     # --------------------------------------------------------------------- #
     # Internal helpers
     # --------------------------------------------------------------------- #
 
-    @staticmethod
-    def _build_map(text: str) -> SortedDict:
-        """Single pass through spaCy (via ``nlp.pipe``) to populate the map."""
-        sent_map: SortedDict = SortedDict()
-        lines = text.splitlines()
-        for line_idx, doc in enumerate(_NLP.pipe(lines), start=1):
-            # Keep sentences exactly as they appear in the original text.
-            line_sents: List[str] = [s.text for s in doc.sents] or [lines[line_idx - 1]]
-            sent_map[line_idx] = SortedDict({sid: s for sid, s in enumerate(line_sents, start=1)})
-        return sent_map
-
-    @staticmethod
-    def _build_annotation(sentence_map: SortedDict) -> str:
-        annotated_parts: List[str] = []
-        for line_id, line_map in sentence_map.items(): 
-            for sent_id, sent in line_map.items():            
-                annotated_parts.append(f"<tid={line_id}_{sent_id}>{sent}</tid>")
-        return "\n".join(annotated_parts)
-    
-    @staticmethod
-    def _build_json_annotation_and_map(
-        data: Any,
-        _attr_idx_start: int = 1,
-        _item_idx_start: int = 1,
-        _path: str = "",
-        _attr_map: Optional[SortedDict] = None,
-    ) -> tuple[Any, SortedDict]:
-        """Return an annotated deep-copy of *data* together with an id→path map."""
-
-        if _attr_map is None:
-            # Use SortedDict to keep attribute ids ordered consistently across recursion levels
-            _attr_map = SortedDict()
-
-        def _json_pointer(parent: str, token: str | int) -> str:
-            """Build a JSON Pointer by appending *token* to *parent*."""
-            # Per RFC 6901 we need to escape '~' and '/' in reference tokens.
-            if isinstance(token, str):
-                token = token.replace('~', '~0').replace('/', '~1')
-            return f"{parent}/{token}" if parent else f"/{token}"
-
-        # -- dict ----------------------------------------------------------- #
-        if isinstance(data, dict):
-            annotated_dict: SortedDict = SortedDict()
-            attr_idx = _attr_idx_start
-            for key, value in data.items():
-                annotated_key = f"<a={attr_idx} k={key}>"
-                _attr_map[attr_idx] = _json_pointer(_path, key)
-                annotated_value, _ = PatchDriver._build_json_annotation_and_map(
-                    value,
-                    _attr_idx_start=attr_idx + 1,
-                    _item_idx_start=1,
-                    _path=_json_pointer(_path, key),
-                    _attr_map=_attr_map,
-                )
-
-                attr_idx = max(_attr_map.keys()) + 1
-                annotated_dict[annotated_key] = annotated_value
-
-            return annotated_dict, _attr_map
-
-        # -- list ----------------------------------------------------------- #
-        if isinstance(data, list):
-            annotated_list: List[Any] = []
-            item_idx = _item_idx_start
-            for element in data:
-                if isinstance(element, (dict, list)):
-                    next_free_id = max(_attr_map.keys()) + 1 if _attr_map else _attr_idx_start
-                    annotated_element, _ = PatchDriver._build_json_annotation_and_map(
-                        element,
-                        _attr_idx_start=next_free_id,
-                        _item_idx_start=1,
-                        _path=_json_pointer(_path, item_idx - 1),
-                        _attr_map=_attr_map,
-                    )
-                else:
-                    annotated_element = f"<i={item_idx} v={element}>"
-
-                annotated_list.append(annotated_element)
-                item_idx += 1
-
-            return annotated_list, _attr_map
-
-        return data, _attr_map
-    
     def _build_tools(self) -> List[Type[LLMTool]]:
         """Build tools for the patch driver."""
 
@@ -401,35 +371,8 @@ class PatchDriver(Generic[T]):
             
         return [ResetToOriginalState, RequestModification, ModifyStateWithPatch]
     
-    def _assemble_text(self) -> str:
-        """Re-assemble the current map back into raw multi-line text."""
-        lines: List[str] = []
-        for line_id, line_map in self._map.items():  
-            sents = [line_map[sid] for sid in line_map]      
-            lines.append("".join(sents))
-        return "\n".join(lines)
     
-    def _sort_patches(self, patches: List[StrPatch]) -> List[StrPatch]:
-        """Sort patches to keep coordinate validity: replacements first, then deletes, then inserts."""
-        
-        priority = {
-            "replace": 0,
-            "delete": 1,
-            "insert_after": 2,
-        }
-
-        def _anchor_line(patch: StrPatch) -> int:
-            anchor_tid = patch.tids[-1] if patch.operation.type == "insert_after" else patch.tids[0]
-            return int(anchor_tid.split("_")[0])
-
-        # Sort patches to keep coordinate validity: replacements first, then deletes, then inserts.
-        sorted_patches = sorted(
-            patches,
-            key=lambda p: (priority.get(p.operation.type, 99), -_anchor_line(p)),
-        )
-        return sorted_patches
-    
-    def _apply_patch(self, patch: StrPatch | JsonPatch) -> None:
+    def _apply_patch(self, patch: BasePatch) -> None:
         """Apply a patch to the current state of the object."""
 
         match patch:
@@ -467,7 +410,7 @@ class PatchDriver(Generic[T]):
                             self._map[idx + 1] = self._map[idx]
 
                         new_line_id = anchor_line + 1
-                        doc = _NLP(text)
+                        doc = NLP(text)
                         sents = [s.text for s in doc.sents] or [text]
                         self._map[new_line_id] = SortedDict({sid: s for sid, s in enumerate(sents, start=1)})
 
@@ -497,6 +440,7 @@ class PatchDriver(Generic[T]):
                     
                 patch_obj = jsonpatch.JsonPatch([op_dict])
                 patch_obj.apply(self._target_object.content, in_place=True)
-            
-class PatchBundle(BaseModel):
-    patches: List[StrPatch]
+
+    # Removed redundant _sort_patches helper – StrPatch already provides
+    # deterministic ordering via ``bundle_builder`` and JsonPatch does not
+    # require sorting.

@@ -233,7 +233,7 @@ JSON_ANNOTATION_TEMPLATE = """
 
     This version of the JSON is the current state of the object.
 </current_state_of_the_text>
-    """
+"""
 
 
 TRY_AGAIN_PROMPT = """

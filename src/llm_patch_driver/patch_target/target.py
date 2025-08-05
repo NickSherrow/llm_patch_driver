@@ -1,4 +1,4 @@
-from typing import Generic, Type, Callable, Optional, Coroutine, Any, TypeVar, List, Dict
+from typing import Generic, Type, Callable, Optional, Coroutine, Any, TypeVar, List, Dict, cast
 from pydantic import BaseModel, model_validator, ValidationError
 from sortedcontainers import SortedDict
 import inspect
@@ -15,7 +15,7 @@ class PatchTarget(BaseModel, Generic[T]):
 
     object: T
     content_attribute: str | None = None
-    validation_condition: Callable[[T], Optional[str] | Coroutine[Any, Any, Optional[str]]] | None = None
+    validation_condition: Callable[[T], Optional[str]] | Callable[[T], Coroutine[Any, Any, Optional[str]]] | None = None
     validation_schema: Type[BaseModel] | None = None
 
     @property
@@ -32,20 +32,20 @@ class PatchTarget(BaseModel, Generic[T]):
         else:
             setattr(self.object, self.content_attribute, value)
 
-    async def validate_content(self) -> str | Coroutine[Any, Any, str | None] | None:
+    async def validate_content(self) -> str | None:
         """Validate the object against the validation schema or condition."""
 
         if schema := self.validation_schema:
             try:
-                schema.model_validate(self.object)
+                schema.model_validate(self.content)
             except ValidationError as e:
                 return str(e)
 
         if function := self.validation_condition:
             if inspect.iscoroutinefunction(function):
-                return await function(self.object)
+                return await function(self.content)
             else:
-                return function(self.object)
+                return cast(Optional[str], function(self.content))
             
         return None
 

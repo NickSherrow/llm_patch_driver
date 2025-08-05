@@ -1,0 +1,28 @@
+---
+description: We use 'uv' instead of 'pip' for adding or removing new dependencies
+alwaysApply: false
+---
+
+For managing dependencies and installing new packages we use 'uv' from Astral.
+You have access to the 'uv' docs but core syntax is:
+
+### Adding deps
+
+'uv add requests' is like 'pip install requests'
+
+#### Specify a version constraint
+uv add 'requests==2.31.0'
+
+#### Add a git dependency
+uv add git+https://github.com/psf/requests
+
+'uv remove requests' is for removing deps from the project
+
+#### Using --dev
+
+If you want to install something that should be available only for developers of the library add --dev to the command. Like 'uv add --dev requests'
+
+WARNING:
+1. NEVER DO 'uv pip install'
+2. NEVER USE pip
+3. Forget about pip
