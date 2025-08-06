@@ -1,10 +1,6 @@
-"""Base adapter for LLM API providers.
-
-This module defines the abstract interface that all LLM API adapters must implement.
-Adapters handle the provider-specific details of:
-- Building API requests from standardized inputs
-- Parsing API responses into standardized outputs  
-- Formatting messages and tool calls according to provider schemas
+"""
+LLM API adapter interface. Goal: to keep the library agnostic 
+to the LLM provider with least amount of code.
 """
 
 from __future__ import annotations
@@ -17,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Callable
 
 from pydantic import BaseModel
 
-from llm_patch_driver.llm.types import ToolCallRequest, ToolCallResponse, Message
+from llm_patch_driver.llm.schemas import ToolCallRequest, ToolCallResponse, Message, ToolSchema
 
 U = TypeVar("U", bound=BaseModel)
 
@@ -30,7 +26,7 @@ class BaseApiAdapter(ABC):
     2. Parsing provider responses into standardized internal types
     3. Formatting messages and tool interactions according to provider schemas
     
-    This abstraction allows the LLMClientWrapper to work with any LLM provider
+    This abstraction allows the PatchDriver to work with any LLM provider
     without knowing the specifics of each provider's API format.
     """
 
@@ -56,18 +52,8 @@ class BaseApiAdapter(ABC):
         pass
 
     @abstractmethod
-    def format_tool_results(
-        self, 
-        tool_calls: List[ToolCallResponse]
-        ) -> List[dict]:
-        """Format tool call results for inclusion in message history.
-        
-        Args:
-            tool_calls: List of (request, response) pairs for executed tool calls
-            
-        Returns:
-            List of formatted message objects ready to add to conversation history
-        """
+    def format_tool_schema(self, tool_schema: ToolSchema) -> Dict[str, Any]:
+        """Format a tool call into a dictionary of parameters ready to pass to the LLM API."""
         pass
 
     # Handlers to parse outputs from the LLM API
@@ -81,18 +67,6 @@ class BaseApiAdapter(ABC):
             
         Returns:
             Message object
-        """
-        pass
-
-    @abstractmethod
-    def parse_object_from_llm_output(self, raw_response: Any) -> U:
-        """Parse an object from the LLM API into a Pydantic object.
-        
-        Args:
-            raw_response: Raw response object from the LLM API
-            
-        Returns:
-            Pydantic or JSON object
         """
         pass
 

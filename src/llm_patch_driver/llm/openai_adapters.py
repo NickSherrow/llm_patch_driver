@@ -1,10 +1,4 @@
-"""OpenAI API adapters for Chat Completions and Responses APIs.
-
-This module provides concrete implementations of BaseApiAdapter for OpenAI's
-two main API formats:
-1. Chat Completions API - Standard OpenAI chat format
-2. Responses API - OpenAI's structured response format
-"""
+"""OpenAI API adapters for Chat Completions and Responses APIs."""
 
 from __future__ import annotations
 
@@ -13,21 +7,17 @@ from typing import Any, Dict, List, Optional, Type, TypeVar
 from pydantic import BaseModel
 
 from llm_patch_driver.llm.base_adapter import BaseApiAdapter
-from llm_patch_driver.llm.types import ToolCallRequest, ToolCallResponse, Message
+from llm_patch_driver.llm.schemas import ToolCallRequest, ToolCallResponse, Message, ToolSchema
 
 U = TypeVar("U", bound=BaseModel)
 
 
 class OpenAIChatCompletions(BaseApiAdapter):
-    """Adapter for OpenAI Chat Completions API.
-    
-    This adapter handles the standard OpenAI chat completion format used by
-    GPT models for conversational interactions with optional tool calling.
-    """
+    """Adapter for OpenAI Chat Completions API."""
 
     def format_llm_call_input(
         self, 
-        messages: List[Message], 
+        messages: List[Message | ToolCallResponse], 
         tools: Optional[List[dict]] = None,
         schema: Optional[Type[U]] = None,
         system_prompt: Optional[str] = None
@@ -44,10 +34,18 @@ class OpenAIChatCompletions(BaseApiAdapter):
             
         # Convert Message objects to OpenAI format and add to messages
         for msg in messages:
-            msg_dict = {
-                "role": msg.role,
-                "content": msg.content
-            }
+            match msg:
+                case Message():
+                    msg_dict = {
+                        "role": msg.role,
+                        "content": msg.content
+                    }
+                case ToolCallResponse():
+                    msg_dict = {
+                        "role": "tool",
+                        "tool_call_id": msg.id,
+                        "content": msg.output
+                    }
             model_params["messages"].append(msg_dict)
         
         # Add tools if provided
@@ -59,28 +57,18 @@ class OpenAIChatCompletions(BaseApiAdapter):
             model_params["response_format"] = schema
             
         return model_params
-
-    def format_tool_results(
-        self, 
-        tool_calls: List[ToolCallResponse]
-        ) -> List[dict]:
-        """Format tool call results for OpenAI Chat Completions API.
-        
-        OpenAI Chat Completions API doesn't require the original request
-        to be included (append=False), only the tool response.
-        """
-        
-        message_list = []
-        
-        for tool_call in tool_calls:
-            response = {
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": tool_call.output
+    
+    def format_tool_schema(self, tool_schema: ToolSchema) -> Dict[str, Any]:
+        """Format a tool call into a dictionary of parameters ready to pass to the LLM API."""
+        return {
+            "type": "function",
+            "function": {
+                "name": tool_schema.name,
+                "parameters": tool_schema.parameters,
+                "description": tool_schema.description,
+                "strict": tool_schema.strict
             }
-            message_list.append(response)
-            
-        return message_list
+        }
 
     def parse_llm_output(self, raw_response: Any) -> Message:
         """Parse OpenAI Chat Completions response into Message."""
@@ -111,12 +99,6 @@ class OpenAIChatCompletions(BaseApiAdapter):
             tool_calls=parsed_tool_calls,
             attached_object=structured_output
         )
-
-    def parse_object_from_llm_output(self, raw_response: Any) -> Any:
-        """Parse structured object from OpenAI Chat Completions response."""
-        
-        # Extract structured output (parsed object)
-        return raw_response.get("parsed")
 
     def parse_messages(self, messages: list) -> List[Message]:
         """Parse OpenAI-formatted messages into Message objects."""
@@ -149,15 +131,11 @@ class OpenAIChatCompletions(BaseApiAdapter):
 
 
 class OpenAIResponses(BaseApiAdapter):
-    """Adapter for OpenAI Responses API.
-    
-    This adapter handles OpenAI's newer Responses API format which provides
-    a different structure for tool calling and message handling.
-    """
+    """Adapter for OpenAI Responses API"""
 
     def format_llm_call_input(
         self, 
-        messages: List[Message], 
+        messages: List[Message | ToolCallResponse], 
         tools: Optional[List[dict]] = None,
         schema: Optional[Type[U]] = None,
         system_prompt: Optional[str] = None
@@ -173,10 +151,26 @@ class OpenAIResponses(BaseApiAdapter):
         # Convert Message objects to Responses API format
         input_messages = []
         for msg in messages:
-            input_messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
+
+            match msg:
+                case Message():
+                    input_messages.append({
+                        "role": msg.role,
+                        "content": msg.content
+                    })
+                case ToolCallResponse():
+                    input_messages.append({
+                        "type": "function_call",
+                        "call_id": msg.id,
+                        "name": msg.request.name,
+                        "arguments": msg.request.arguments
+                    })
+                    input_messages.append({
+                        "type": "function_call_output",
+                        "call_id": msg.id,
+                        "output": msg.output
+                    })
+
         
         model_params["input"] = input_messages
         
@@ -189,38 +183,15 @@ class OpenAIResponses(BaseApiAdapter):
             model_params["text_format"] = schema
             
         return model_params
-
-    def format_tool_results(
-        self, 
-        tool_calls: List[ToolCallResponse]
-        ) -> List[dict]:
-        """Format tool call results for OpenAI Responses API.
-        
-        OpenAI Responses API requires both the original request and response
-        to be included (append=True).
-        """
-        
-        message_list = []
-        
-        for tool_call in tool_calls:
-            # First add the original request
-            request = {
-                "type": "function_call",
-                "call_id": tool_call.id,
-                "name": tool_call.request.name,
-                "arguments": tool_call.request.arguments
-            }
-            message_list.append(request)
-            
-            # Then add the response
-            response = {
-                "type": "function_call_output",
-                "call_id": tool_call.id,
-                "output": tool_call.output
-            }
-            message_list.append(response)
-            
-        return message_list
+    
+    def format_tool_schema(self, tool_schema: ToolSchema) -> Dict[str, Any]:
+        """Format a tool call into a dictionary of parameters ready to pass to the OpenAI ResponsesAPI."""
+        return {
+            "type": "function",
+            "name": tool_schema.name,
+            "parameters": tool_schema.parameters,
+            "description": tool_schema.description
+        }
 
     def parse_llm_output(self, raw_response: Any) -> Message:
         """Parse OpenAI Responses API response into Message."""
@@ -255,12 +226,6 @@ class OpenAIResponses(BaseApiAdapter):
             tool_calls=parsed_tool_calls,
             attached_object=structured_output
         )
-
-    def parse_object_from_llm_output(self, raw_response: Any) -> Any:
-        """Parse structured object from OpenAI Responses API response."""
-        
-        # Extract structured output (parsed object)
-        return raw_response.get("output_parsed")
 
     def parse_messages(self, messages: list) -> List[Message]:
         """Parse Responses API-formatted messages into Message objects."""
