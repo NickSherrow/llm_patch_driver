@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field, model_validator, PrivateAttr
 from typing import List, Literal, Type, ClassVar
 from sortedcontainers import SortedDict
-from ..base_patch import BasePatch
+from ..base_patch import BasePatch, PatchPrompts
 from .prompts import STR_ANNOTATION_TEMPLATE, STR_PATCH_SYNTAX, ANNOTATION_PLACEHOLDER
 
 from llm_patch_driver.patch_target.target import PatchTarget
@@ -13,6 +13,15 @@ try:
 except OSError:
     NLP = spacy.blank("en")
     NLP.add_pipe("sentencizer")
+
+string_prompts = PatchPrompts(
+    syntax=STR_PATCH_SYNTAX,
+    annotation_template=STR_ANNOTATION_TEMPLATE,
+    annotation_placeholder=ANNOTATION_PLACEHOLDER,
+    modify_tool_doc="",
+    reset_tool_doc="",
+    request_tool_doc="",
+)
 
 class ReplaceOp(BaseModel):
     """Pattern substitution operation (no tids here)."""
@@ -38,9 +47,7 @@ class StrPatch(BasePatch):
     tids: List[str] = Field(..., description="Sentence identifiers in '<line>_<sent>' form")
     operation: ReplaceOp | DeleteOp | InsertAfterOp
 
-    syntax: ClassVar[str] = STR_PATCH_SYNTAX
-    annotation_template: ClassVar[str] = STR_ANNOTATION_TEMPLATE
-    annotation_placeholder: ClassVar[str] = ANNOTATION_PLACEHOLDER
+    prompts: ClassVar[PatchPrompts] = string_prompts
 
     # Internal cache of parsed tids for fast access during apply phase
     _parsed_tids: List[tuple[int, int]] = PrivateAttr()
@@ -134,7 +141,7 @@ class StrPatch(BasePatch):
         class StrPatchBundle(BaseModel):
             patches: List[StrPatch]
 
-            __doc__ = f"Patch bundle. Syntax: {cls.syntax}"
+            __doc__ = f"Patch bundle. Syntax: {cls.prompts.syntax}"
 
             @model_validator(mode="after")
             def _check_ids(cls, v):

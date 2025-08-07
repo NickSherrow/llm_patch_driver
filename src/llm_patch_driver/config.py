@@ -12,8 +12,8 @@ rich.traceback.install()
 @dataclass
 class LogCollector:
     module_name: str
+    logger: logging.Logger
     tracer: OITracer | None = None
-    logger: logging.Logger | None = None
 
 class LibConfig(BaseModel):
     api_type: Literal["responses", "chat_completion", "custom"] = "chat_completion"
@@ -32,8 +32,7 @@ class LibConfig(BaseModel):
             collector.tracer = provider.get_tracer(collector.module_name)
 
     def build_log_collector(self, module_name: str) -> LogCollector:
-        collector = LogCollector(module_name)
-        collector.logger = logging.getLogger(module_name)
+        collector = LogCollector(module_name, logging.getLogger(module_name))
         if self.otel_provider:
             collector.tracer = self.otel_provider.get_tracer(module_name)
         self._log_collectors.append(collector)
