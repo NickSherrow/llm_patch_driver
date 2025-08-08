@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Union, Optional, Type, ClassVar
-from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, model_validator
+from pydantic import BaseModel, Field, ConfigDict, StrictBool, StrictFloat, StrictInt, model_validator, ValidationInfo
 from sortedcontainers import SortedDict
 import jsonpatch
+import json
 
 from ..base_patch import BasePatch, PatchBundle, PatchPrompts
 from llm_patch_driver.patch_target.target import PatchTarget
@@ -49,6 +50,15 @@ class JsonPatch(BasePatch):
     )
 
     prompts: ClassVar[PatchPrompts] = json_prompts
+
+    @classmethod
+    def get_bundle_schema(cls) -> Type[PatchBundle]:
+        class JsonPatchBundle(PatchBundle):
+            patches: List[JsonPatch]
+
+            __doc__ = f"Patch bundle. Syntax: {cls.prompts.syntax}"
+
+        return JsonPatchBundle
 
     def apply_patch(self, patch_target: PatchTarget) -> None:
         path = patch_target._lookup_map[self.a_id]
@@ -147,6 +157,8 @@ class JsonPatch(BasePatch):
                     
                 annotated_dict[annotated_key] = annotated_value
 
+            if _path == "":
+                return json.dumps(annotated_dict, indent=4, ensure_ascii=False)
             return annotated_dict
 
         # -- list ----------------------------------------------------------- #
@@ -167,8 +179,12 @@ class JsonPatch(BasePatch):
                 annotated_list.append(annotated_element)
                 item_idx += 1
 
+            if _path == "":
+                return json.dumps(annotated_list, indent=4, ensure_ascii=False)
             return annotated_list
 
+        if _path == "":
+            return json.dumps(data, indent=4, ensure_ascii=False)
         return data
     
     @classmethod
@@ -176,30 +192,6 @@ class JsonPatch(BasePatch):
         """Build a content from the map."""
 
         return original_data
-    
-    @classmethod
-    def build_bundle_schema(cls, map: SortedDict) -> Type[BaseModel]:
-        """Build a bundle schema."""
-
-        class JsonPatchBundle(BaseModel):
-            patches: List[JsonPatch]
-
-            __doc__ = f"Patch bundle. Syntax: {cls.prompts.syntax}"
-
-            @model_validator(mode="after")
-            def _check_ids(cls, v):
-                id_map = map
-
-                for patch in v.patches:
-                    if not patch.a_id:
-                        raise ValueError("Patch must contain an attribute id")
-        
-                    if patch.a_id not in id_map:
-                        raise ValueError(f"Attribute {patch.a_id} does not exist")
-
-                return v
-
-        return JsonPatchBundle
 
     @model_validator(mode="after")
     def _check_ops(self):
@@ -216,6 +208,20 @@ class JsonPatch(BasePatch):
         
         return self
     
+    @model_validator(mode="after")
+    def _check_ids(self, info: ValidationInfo):
+
+        if isinstance(info.context, dict):
+            id_map: dict = info.context.get("id_content_map", {})
+
+            if not self.a_id:
+                raise ValueError("Patch must contain an attribute id")
+
+            if self.a_id not in id_map:
+                raise ValueError(f"Attribute {self.a_id} does not exist")
+
+        return self
+    
     @classmethod
     def _json_pointer(cls, parent: str, token: str | int) -> str:
         """Build a JSON Pointer by appending *token* to *parent*."""
@@ -223,4 +229,3 @@ class JsonPatch(BasePatch):
         if isinstance(token, str):
             token = token.replace('~', '~0').replace('/', '~1')
         return f"{parent}/{token}" if parent else f"/{token}"
-        

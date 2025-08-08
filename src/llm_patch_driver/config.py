@@ -16,7 +16,6 @@ class LogCollector:
     tracer: OITracer | None = None
 
 class LibConfig(BaseModel):
-    api_type: Literal["responses", "chat_completion", "custom"] = "chat_completion"
 
     _otel_provider: Optional[TracerProvider] = None
     _log_collectors: List[LogCollector] = PrivateAttr(default_factory=list)

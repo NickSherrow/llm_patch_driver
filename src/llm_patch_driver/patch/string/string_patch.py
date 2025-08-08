@@ -1,7 +1,7 @@
-from pydantic import BaseModel, Field, model_validator, PrivateAttr
+from pydantic import BaseModel, Field, model_validator, PrivateAttr, ValidationInfo
 from typing import List, Literal, Type, ClassVar
 from sortedcontainers import SortedDict
-from ..base_patch import BasePatch, PatchPrompts
+from ..base_patch import BasePatch, PatchPrompts, PatchBundle
 from .prompts import STR_ANNOTATION_TEMPLATE, STR_PATCH_SYNTAX, ANNOTATION_PLACEHOLDER
 
 from llm_patch_driver.patch_target.target import PatchTarget
@@ -52,9 +52,35 @@ class StrPatch(BasePatch):
     # Internal cache of parsed tids for fast access during apply phase
     _parsed_tids: List[tuple[int, int]] = PrivateAttr()
 
-    # ------------------------------------------------------------------ #
-    # Post-init parsing & validation of tids string → int tuples
-    # ------------------------------------------------------------------ #
+    @property
+    def bundle_schema(self) -> Type[PatchBundle]:
+       
+        class StrPatchBundle(PatchBundle):
+            patches: List[StrPatch]
+
+            __doc__ = f"Patch bundle. Syntax: {StrPatch.prompts.syntax}"
+
+            def model_post_init(self, __context):
+                """Sort patches to keep coordinate validity: replacements first, then deletes, then inserts."""
+                
+                priority = {
+                    "replace": 0,
+                    "delete": 1,
+                    "insert_after": 2,
+                }
+
+                def _anchor_line(patch: StrPatch) -> int:
+                    anchor_tid = patch.tids[-1] if patch.operation.type == "insert_after" else patch.tids[0]
+                    return int(anchor_tid.split("_")[0])
+
+                # Sort patches to keep coordinate validity: replacements first, then deletes, then inserts.
+                sorted_patches = sorted(
+                    self.patches,
+                    key=lambda p: (priority.get(p.operation.type, 99), -_anchor_line(p)),
+                )
+                self.patches = sorted_patches
+
+        return StrPatchBundle
 
     def apply_patch(self, patch_target: PatchTarget) -> None:
         match self.operation:
@@ -133,52 +159,6 @@ class StrPatch(BasePatch):
             lines.append("".join(sents))
             
         return "\n".join(lines)
-    
-    @classmethod
-    def build_bundle_schema(cls, map: SortedDict) -> Type[BaseModel]:
-        """Build a bundle schema."""
-
-        class StrPatchBundle(BaseModel):
-            patches: List[StrPatch]
-
-            __doc__ = f"Patch bundle. Syntax: {cls.prompts.syntax}"
-
-            @model_validator(mode="after")
-            def _check_ids(cls, v):
-                id_map = map
-
-                for patch in v.patches:
-                    for line, sent in patch._parsed_tids:
-                        if line not in id_map:
-                            raise ValueError(f"Line {line} does not exist")
-            
-                        if sent not in id_map[line]:
-                            raise ValueError(f"Sentence {sent} does not exist in line {line}")
-
-                return v
-
-            def model_post_init(self, __context):
-                """Sort patches to keep coordinate validity: replacements first, then deletes, then inserts."""
-                
-                priority = {
-                    "replace": 0,
-                    "delete": 1,
-                    "insert_after": 2,
-                }
-
-                def _anchor_line(patch: StrPatch) -> int:
-                    anchor_tid = patch.tids[-1] if patch.operation.type == "insert_after" else patch.tids[0]
-                    return int(anchor_tid.split("_")[0])
-
-                # Sort patches to keep coordinate validity: replacements first, then deletes, then inserts.
-                sorted_patches = sorted(
-                    self.patches,
-                    key=lambda p: (priority.get(p.operation.type, 99), -_anchor_line(p)),
-                )
-                self.patches = sorted_patches
-
-        return StrPatchBundle
-    
 
     @model_validator(mode="after")
     def _parse_tids(cls, v):  # type: ignore[cls-parameter-name]
@@ -198,3 +178,17 @@ class StrPatch(BasePatch):
         v._parsed_tids = parsed
 
         return v
+    
+    @model_validator(mode="after")
+    def _check_ids(self, info: ValidationInfo):
+        if isinstance(info.context, dict):
+            id_map: dict = info.context.get("id_content_map", {})
+            for line, sent in self._parsed_tids:
+                if line not in id_map:
+                    raise ValueError(f"Line {line} does not exist")
+                if sent not in id_map[line]:
+                    raise ValueError(f"Sentence {sent} does not exist in line {line}")
+
+        return self
+
+    

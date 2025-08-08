@@ -2275,7 +2275,7 @@ TEST_JSON = {
 }
 
 
-from llm_patch_driver import PatchTarget
+from llm_patch_driver import PatchTarget, JsonPatch
 from dataclasses import dataclass
 
 @dataclass
@@ -2286,7 +2286,8 @@ class TestingJsonPatch:
 json_target = PatchTarget(
     object=TestingJsonPatch(raw_json=TEST_JSON, some_attribute="test"), 
     validation_schema=Company,
-    content_attribute="raw_json"
+    content_attribute="raw_json",
+    patch_type=JsonPatch
 )
 
 user_prompt = TEST_JSON_PROMPT.format(

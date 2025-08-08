@@ -21,7 +21,7 @@ class PatchTarget(BaseModel, Generic[T]):
     """Container for the object to be patched."""
 
     object: T
-    patch_type: Type[BasePatch]
+    patch_type: Type['BasePatch']
     current_error: str | None = None
     content_attribute: str | None = None
     validation_condition: Callable[[T], Optional[str]] | Callable[[T], Coroutine[Any, Any, Optional[str]]] | None = None
@@ -84,13 +84,13 @@ class PatchTarget(BaseModel, Generic[T]):
         )
     
     async def reset_to_original_state(self) -> None:
-        self.content = self._backup_copy
+        self.content = deepcopy(self._backup_copy)
         self._iteration = 0
         self._lookup_map = self.patch_type.build_map(self.content)
         self._annotated = self.patch_type.build_annotation(self._lookup_map)
         self.current_error = await self.validate_content()
     
-    async def apply_patches(self, patches: List[BasePatch]) -> None:
+    async def apply_patches(self, patches: List['BasePatch']) -> None:
         for patch in patches:
             patch.apply_patch(self)
 

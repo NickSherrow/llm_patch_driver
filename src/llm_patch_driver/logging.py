@@ -220,6 +220,8 @@ def log_wrapper(
                 if spec.rich_console is not None:
                     arg_data.rich_console = spec.rich_console(value)
 
+                log_data.append(arg_data)
+
             invocation_id = nanoid.generate(size=10)
 
             return LogData(id=invocation_id, payload=log_data)

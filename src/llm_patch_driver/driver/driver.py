@@ -19,6 +19,7 @@ from llm_patch_driver.patch_target.target import PatchTarget
 from llm_patch_driver.llm.base_tool import LLMTool
 from llm_patch_driver.driver.prompts import REQUEST_PATCH_PROMPT, PATCHING_LOOP_SYSTEM_PROMPT
 from llm_patch_driver.config import config
+from llm_patch_driver.llm import OpenAIChatCompletions
 
 from llm_patch_driver.logging import log_wrapper, OutputFormat, ArgSpec, ArgLogData, LogData
 
@@ -30,20 +31,24 @@ U = TypeVar("U", bound=BaseModel)
 class PatchDriver(Generic[T]):
     """Maintains the sentence map and annotated view; applies patch bundles."""
 
-    def __init__(self, 
-                 target_object: PatchTarget[T],
-                 create_method: Callable,
-                 parse_method: Callable, 
-                 model_args: dict,
-                 api_adapter: BaseApiAdapter,
-                 tools: List[Type[LLMTool]] = []):
+    def __init__(
+        self,
+        target_object: PatchTarget[T],
+        create_method: Callable,
+        parse_method: Callable,
+        model_args: dict | None = None,
+        api_adapter: BaseApiAdapter = OpenAIChatCompletions(),
+        tools: List[Type[LLMTool]] | None = None,
+        max_cycles: int = 25,
+    ):
         
         self.api_adapter = api_adapter
         self.target_object = target_object
 
         self._create_method = create_method
         self._parse_method = parse_method
-        self._model_args = model_args
+        self._model_args = model_args if model_args is not None else {}
+        self._max_cycles = max_cycles
 
         # prompts prebuilt
 
@@ -61,7 +66,7 @@ class PatchDriver(Generic[T]):
         self._tool_map = {} # lookup table tool_name:tool
         self._tools = [] # list of tool schemas to be passed to the LLM
 
-        driver_tools = self._build_tools() + tools
+        driver_tools = self._build_tools() + [] if tools is None else tools
 
         for tool in driver_tools:
             self.bind_tool(tool)
@@ -93,6 +98,7 @@ class PatchDriver(Generic[T]):
         object_to_patch = self.target_object
         current_messages = original_messages + [self._loop_prompt_message]
 
+        num_cycles = 0
         while object_to_patch.current_error:
             # run LLM with current data state + error message
             message = await self.call_llm(
@@ -126,6 +132,10 @@ class PatchDriver(Generic[T]):
             
             # run validation to decide if we should continue the loop
             object_to_patch.current_error = await object_to_patch.validate_content()
+
+            num_cycles += 1
+            if num_cycles >= self._max_cycles and object_to_patch.current_error:
+                raise ValueError(f"Patching loop reached max cycles ({self._max_cycles}). Stopping.")
 
     # --------------------------------------------------------------------- #
     # advanced public API
@@ -256,6 +266,7 @@ class PatchDriver(Generic[T]):
         modify_doc = object_to_patch.patch_type.prompts.modify_tool_doc
 
         class ResetToOriginalState(LLMTool):
+            
             reset_to_original_state: bool = Field(description="True if the state of the object should be reset to the original state. False if the state of the object should be modified with the other tools.")
 
             __doc__ = f"{reset_doc}"

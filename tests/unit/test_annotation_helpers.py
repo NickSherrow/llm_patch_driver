@@ -1,12 +1,9 @@
 from sortedcontainers import SortedDict
 import pytest
+import json
 
-from llm_patch_driver.driver.annotation_helpers import (
-    build_map,
-    map_to_annotated_text,
-    map_to_original_text,
-    build_json_annotation_and_map,
-)
+from llm_patch_driver.patch.string.string_patch import StrPatch
+from llm_patch_driver.patch.json.json_patch import JsonPatch
 
 
 SAMPLE_TEXT = "Hello world. How are you?\nAnother line."
@@ -18,15 +15,15 @@ _DEF_NORMALIZE_HELPER = lambda s: "".join(s.split())
 
 def test_build_map_and_original_roundtrip():
     """Original text without whitespace differences should be reconstructable."""
-    sent_map = build_map(SAMPLE_TEXT)
-    reconstructed = map_to_original_text(sent_map)
+    sent_map = StrPatch.build_map(SAMPLE_TEXT)
+    reconstructed = StrPatch.content_from_map(SAMPLE_TEXT, sent_map)
     assert _DEF_NORMALIZE_HELPER(reconstructed) == _DEF_NORMALIZE_HELPER(SAMPLE_TEXT)
 
 
 def test_map_to_annotated_text():
     """map_to_annotated_text should include sentence ids and preserve sentence order."""
-    sent_map = build_map(SAMPLE_TEXT)
-    annotated = map_to_annotated_text(sent_map)
+    sent_map = StrPatch.build_map(SAMPLE_TEXT)
+    annotated = StrPatch.build_annotation(sent_map)
     expected = (
         "<tid=1_1>Hello world.</tid>\n"
         "<tid=1_2>How are you?</tid>\n"
@@ -37,15 +34,15 @@ def test_map_to_annotated_text():
 
 def test_build_json_annotation_and_map():
     data = {"a": 1, "b": {"c": [2, 3]}}
-
-    annotated, attr_map = build_json_annotation_and_map(data)
+    attr_map = JsonPatch.build_map(data)
+    annotated = JsonPatch.build_annotation(data, attr_map)
 
     # Expected attribute id -> JSON pointer mapping
     expected_attr_map = SortedDict({1: "/a", 2: "/b", 3: "/b/c"})
     assert attr_map == expected_attr_map
 
-    # Expected annotated structure (note that scalar values are kept unmodified)
-    expected_annotated = {
+    # Expected annotated JSON string (top-level should be a formatted string)
+    expected_annotated_struct = {
         "<a=1 k=a>": 1,
         "<a=2 k=b>": {
             "<a=3 k=c>": [
@@ -54,4 +51,5 @@ def test_build_json_annotation_and_map():
             ]
         },
     }
+    expected_annotated = json.dumps(expected_annotated_struct, indent=4, ensure_ascii=False)
     assert annotated == expected_annotated
