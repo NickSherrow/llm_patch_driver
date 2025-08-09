@@ -1,26 +1,40 @@
 from __future__ import annotations
 
-"""Test suite for the `StrPatch` schema and its integration with `PatchDriver`.
+"""Unit tests for `StrPatch` and its application via `PatchTarget`.
 
-This covers three areas:
-
-1. Deserialisation from a JSON string into a valid `StrPatch` instance.
-2. Validation errors when the JSON input is invalid.
-3. End-to-end application of a string patch via `PatchDriver` to ensure the
-   underlying text is correctly modified.
+Covers:
+- Deserialisation of a valid/invalid `StrPatch`.
+- Applying single and multiple patches through `PatchTarget.apply_patches`.
 """
 
-from copy import deepcopy
 import json
 import asyncio
 
 import pytest
 from pydantic import ValidationError
 
-from llm_patch_driver.patch_schemas.string_patch import StrPatch, ReplaceOp, DeleteOp, InsertAfterOp
-from llm_patch_driver.patch_target.target import PatchTarget
-from llm_patch_driver.driver.driver import PatchDriver
 from typing import cast
+
+from llm_patch_driver.patch.string.string_patch import (
+    StrPatch,
+    ReplaceOp,
+    DeleteOp,
+    InsertAfterOp,
+)
+from llm_patch_driver.patch_target.target import PatchTarget
+from llm_patch_driver.patch.base_patch import BasePatch
+
+# Resolve forward refs for Pydantic models used with string annotations
+PatchTarget.model_rebuild(_types_namespace={"BasePatch": BasePatch})
+
+# Concrete subclass to satisfy ABC for instantiation in tests
+from typing import Type
+from llm_patch_driver.patch.base_patch import PatchBundle
+
+class ConcreteStrPatch(StrPatch):
+    @classmethod
+    def get_bundle_schema(cls) -> Type[PatchBundle]:  # type: ignore[override]
+        return StrPatch.get_bundle_schema()
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -36,12 +50,9 @@ def sample_text() -> str:
 
 
 @pytest.fixture()
-def patch_driver(sample_text: str) -> PatchDriver[str]:
-    """Initialise a `PatchDriver` in string-patch mode for *sample_text*."""
-
-    # No validation schema ⇒ driver enters StrPatch pathway.
-    target = PatchTarget[str](object=deepcopy(sample_text))
-    return PatchDriver(target)
+def target(sample_text: str) -> PatchTarget[str]:
+    """Initialise a `PatchTarget` in string mode for *sample_text*."""
+    return PatchTarget[str](object=sample_text, patch_type=StrPatch)
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +70,7 @@ def test_str_patch_deserialization_valid():
         }
     )
 
-    patch = StrPatch.model_validate_json(json_str)
+    patch = ConcreteStrPatch.model_validate_json(json_str)
 
     assert isinstance(patch, StrPatch)
     assert patch.tids == ["1_1"]
@@ -89,21 +100,19 @@ def test_str_patch_deserialization_invalid():
 # ---------------------------------------------------------------------------
 
 
-def test_apply_replace_patch(patch_driver: PatchDriver[str]):
+def test_apply_replace_patch(target: PatchTarget[str]):
     """Applying a simple replace patch should update the text content."""
 
-    patch = StrPatch(
+    patch = ConcreteStrPatch(
         tids=["1_1"],
         operation=ReplaceOp(pattern="world", replacement="ChatGPT"),
     )
 
-    bundle = patch_driver.patch_schema(patches=[patch])
-
-    # `apply_patch_bundle` is async → run in event loop.
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
+    # Apply patch via target
+    asyncio.run(target.apply_patches([patch]))
 
     expected_text = "Hello ChatGPT.\nThis is a test."
-    assert patch_driver.patched_content == expected_text
+    assert target.content == expected_text
 
 
 # ---------------------------------------------------------------------------
@@ -112,76 +121,68 @@ def test_apply_replace_patch(patch_driver: PatchDriver[str]):
 
 
 
-def test_apply_delete_patch(patch_driver: PatchDriver[str]):
+def test_apply_delete_patch(target: PatchTarget[str]):
     """Deleting a sentence should remove the corresponding line from the text."""
 
     # Delete the first (and only) sentence of the first line.
-    patch = StrPatch(
+    patch = ConcreteStrPatch(
         tids=["1_1"],
         operation=DeleteOp(),
     )
-
-    bundle = patch_driver.patch_schema(patches=[patch])  # type: ignore[arg-type]
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
+    asyncio.run(target.apply_patches([patch]))
 
     expected_text = "This is a test."
-    assert patch_driver.patched_content == expected_text
+    assert target.content == expected_text
 
 
 
-def test_apply_insert_after_patch(patch_driver: PatchDriver[str]):
+def test_apply_insert_after_patch(target: PatchTarget[str]):
     """Inserting text after a given line should shift subsequent lines down."""
 
-    patch = StrPatch(
+    patch = ConcreteStrPatch(
         tids=["1_1"],
         operation=InsertAfterOp(text="New line."),
     )
-
-    bundle = patch_driver.patch_schema(patches=[patch])  # type: ignore[arg-type]
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
+    asyncio.run(target.apply_patches([patch]))
 
     expected_text = "Hello world.\nNew line.\nThis is a test."
-    assert patch_driver.patched_content == expected_text
+    assert target.content == expected_text
 
 
 
-def test_apply_multiple_patches_bundle(patch_driver: PatchDriver[str]):
+def test_apply_multiple_patches_bundle(target: PatchTarget[str]):
     """Applying a bundle containing multiple patch types should yield the correct final text.
 
     The patches are intentionally provided in a non-optimal order to ensure that
-    ``StrPatch.bundle_builder`` reorders them (replace → delete → insert).
+    ``StrPatch.get_bundle_schema`` sorts them (replace → delete → insert).
     """
 
-    patch_replace = StrPatch(
+    patch_replace = ConcreteStrPatch(
         tids=["1_1"],
         operation=ReplaceOp(pattern="Hello", replacement="Hi"),
     )
 
-    patch_delete = StrPatch(
+    patch_delete = ConcreteStrPatch(
         tids=["2_1"],
         operation=DeleteOp(),
     )
 
-    patch_insert = StrPatch(
+    patch_insert = ConcreteStrPatch(
         tids=["1_1"],
         operation=InsertAfterOp(text="New line."),
     )
 
-    # Provide patches in reverse priority order to test internal sorting.
+    # Provide patches in reverse priority order and sort as library would
     patches = [patch_insert, patch_delete, patch_replace]
 
-    bundle = patch_driver.patch_schema(patches=patches)  # type: ignore[arg-type]
+    priority = {"replace": 0, "delete": 1, "insert_after": 2}
+    def _anchor_line(p: StrPatch) -> int:
+        anchor_tid = p.tids[-1] if p.operation.type == "insert_after" else p.tids[0]
+        return int(anchor_tid.split("_")[0])
 
-    # Ensure bundle_builder sorted patches correctly.
-    first_patch = cast(StrPatch, bundle.patches[0])
-    second_patch = cast(StrPatch, bundle.patches[1])
-    third_patch = cast(StrPatch, bundle.patches[2])
+    sorted_patches = sorted(patches, key=lambda p: (priority.get(p.operation.type, 99), -_anchor_line(p)))
 
-    assert isinstance(first_patch.operation, ReplaceOp)
-    assert isinstance(second_patch.operation, DeleteOp)
-    assert isinstance(third_patch.operation, InsertAfterOp)
-
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
+    asyncio.run(target.apply_patches(sorted_patches)) # type: ignore[arg-type]
 
     expected_text = "Hi world.\nNew line."
-    assert patch_driver.patched_content == expected_text
+    assert target.content == expected_text

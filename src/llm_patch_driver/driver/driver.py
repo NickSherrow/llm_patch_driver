@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, model_validator, PrivateAttr, ValidationE
 from sortedcontainers import SortedDict
 
 from llm_patch_driver.llm.base_adapter import BaseApiAdapter
-from llm_patch_driver.llm.schemas import ToolCallRequest, ToolCallResponse, Message
+from llm_patch_driver.llm.schemas import ToolCallRequest, ToolCallResponse, Message, parse_history_to_rich_renderable
 from llm_patch_driver.patch.base_patch import PatchBundle, BasePatch
 from llm_patch_driver.patch.json.json_patch import JsonPatch
 from llm_patch_driver.patch.string.string_patch import ReplaceOp, DeleteOp, InsertAfterOp, StrPatch
@@ -116,7 +116,11 @@ class PatchDriver(Generic[T]):
 
                 try:
                     tool_args = json.loads(tool_call.arguments)
-                    raw_tool_response = await tool_func(**tool_args)()
+                    tool_instance = tool_func.model_validate(
+                        tool_args, 
+                        context={"id_content_map": object_to_patch._lookup_map}
+                        )
+                    raw_tool_response = await tool_instance()
 
                 except Exception as e:
                     raise ValueError(f"Error calling tool {tool_call.name}: {e}") from e
@@ -161,14 +165,19 @@ class PatchDriver(Generic[T]):
             text=object_to_patch.annotated_content
             )
         
-        request_schema = object_to_patch.patch_type.build_bundle_schema(object_to_patch._lookup_map)
+        request_schema = object_to_patch.patch_type.get_bundle_schema()
         
         message = await self.call_llm(
             schema=request_schema, 
             messages=[Message(role="system", content=prompt)]
         )
+
+        patch_bundle = request_schema.model_validate(
+            message.attached_object, 
+            context={"id_content_map": object_to_patch._lookup_map}
+            )
         
-        return cast(PatchBundle, message.attached_object)
+        return patch_bundle
 
     def bind_tool(self, tool: Type[LLMTool]):
         """Add a tool to the patch driver.
@@ -193,10 +202,10 @@ class PatchDriver(Generic[T]):
 
     @log_wrapper(
         log_input=[
-            ArgSpec(name="messages", logger_level="INFO", otel_attribute="input"),
+            ArgSpec(name="messages", logger_level="INFO", otel_attribute="messages", rich_console=parse_history_to_rich_renderable),
             ArgSpec(name="tools", logger_level="INFO", otel_attribute="metadata")
             ], 
-            log_output=OutputFormat(otel_output=True, logger_level="INFO"),
+            log_output=OutputFormat(otel_output="messages", logger_level="INFO", rich_console=parse_history_to_rich_renderable),
             span_kind="llm")
     async def call_llm(
         self,
@@ -258,44 +267,60 @@ class PatchDriver(Generic[T]):
         """
 
         object_to_patch = self.target_object
-        bundle_schema = object_to_patch.patch_type.build_bundle_schema(object_to_patch._lookup_map)
+        bundle_schema = object_to_patch.patch_type.get_bundle_schema()
         parent = self
 
-        reset_doc = object_to_patch.patch_type.prompts.reset_tool_doc
-        request_doc = object_to_patch.patch_type.prompts.request_tool_doc
-        modify_doc = object_to_patch.patch_type.prompts.modify_tool_doc
-
         class ResetToOriginalState(LLMTool):
+            """Reset the corrupted response to it's original state before your modifications.
+            
+            Use this tool if your fixing process went wrong and you need to start over."""
             
             reset_to_original_state: bool = Field(description="True if the state of the object should be reset to the original state. False if the state of the object should be modified with the other tools.")
-
-            __doc__ = f"{reset_doc}"
 
             async def __call__(self) -> str:
                 await object_to_patch.reset_to_original_state()
                 return "The state of the object was reset to the original state."
             
-        class RequestModification(LLMTool):
+        class ModifyWithQuery(LLMTool):
+            """Request a specific modification to the corrupted response from another LLM.
 
-            query: str = Field(description="The query to the LLM that will be used to generate a patch.")
-            context: str = Field(description="The context to the LLM that will be used to generate a patch.")
+            Use this tool if the modification is too complex.
 
-            __doc__ = f"{request_doc}"
+            Notes:
+            - The LLM will not see the original task! It will only receive the annotated
+            version of the corrupted response, your query and any information you add to 
+            the query as context.
+            - To get good results, carefully craft the plan of the required modification.
+            Explain in details what needs to be done. Remember, the only context is available
+            to the LLM is the annotated version of the corrupted response, your plan, and 
+            the context you provide.
+            """
+
+            plan: str = Field(description="The detailed and thoughtful plan of the required modification in Markdown format.")
+            context: str = Field(description="Any supportive information that would help LLM deliver the required modification.")
 
             async def __call__(self) -> str:
-                patch_bundle = await parent.request_patch_bundle(self.query, self.context)
+                patch_bundle = await parent.request_patch_bundle(self.plan, self.context)
                 await object_to_patch.apply_patches(patch_bundle.patches)
                 return f"The following patch was generated: {patch_bundle.model_dump_json()}. It was applied to the text. Check the current state of the object to see the changes."
             
-        class ModifyStateWithPatch(LLMTool):
+        class ModifyWithPatch(LLMTool):
+            """Generate a patch that would fix the corrupted response.
+            
+            Use this tool if you have a good idea of what needs to be done, and you can
+            express this idea as a patch.
+
+            Notes:
+            - Each patch requires a lot of thinking and planning. If you decide to use this tool,
+            be verbose in your reasoning. Provide as much details as possible.
+            - Be careful to the patch syntax.
+            """
 
             provided_patch_bundle: bundle_schema = Field(description="The patches to be applied to the state of the object.") # type: ignore[valid-type]
-
-            __doc__ = f"{modify_doc}"
 
             async def __call__(self) -> str:
                 patches = self.provided_patch_bundle.patches
                 await object_to_patch.apply_patches(patches)
                 return "The state of the object was modified with the patches."
             
-        return [ResetToOriginalState, RequestModification, ModifyStateWithPatch]
+        return [ResetToOriginalState, ModifyWithQuery, ModifyWithPatch]

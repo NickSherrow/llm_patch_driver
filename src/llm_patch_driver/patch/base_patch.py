@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 from abc import ABC, abstractmethod
 from sortedcontainers import SortedDict
-from typing import List, Type, Any, Callable, ClassVar
+from typing import List, Type, Any, Callable, ClassVar, TYPE_CHECKING
 
-from llm_patch_driver.patch_target.target import PatchTarget
+if TYPE_CHECKING:
+    from llm_patch_driver.patch_target.target import PatchTarget
 
 @dataclass
 class PatchPrompts: #TODO: check that provided string templates have all required variables
@@ -42,7 +43,7 @@ class BasePatch(BaseModel, ABC):
 
     @classmethod
     @abstractmethod
-    def build_annotation(cls, map: SortedDict) -> str:
+    def build_annotation(cls, data: Any, map: SortedDict) -> str:
         """Build an annotation from the map."""
 
     @classmethod

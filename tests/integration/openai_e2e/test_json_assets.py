@@ -2,6 +2,7 @@
 from pydantic import BaseModel, Field, model_validator, EmailStr
 import re
 from typing import List
+import json
 
 TRANSCRIPT = """
 **MS. GRANT (Board Chair):** All right, we're moving to the main item, which is our organizational structure. Mike, you said you wanted to talk through it, so, the floor's yours.
@@ -258,11 +259,15 @@ The output should be a valid JSON object that can be parsed by the model_validat
 </compensation>
 
 <contacts>
+```json
 {CONTACTS}
+```
 </contacts>
 
 <schema>
+```json
 {SCHEMA}
+```
 </schema>
 """
 
@@ -2293,7 +2298,7 @@ json_target = PatchTarget(
 user_prompt = TEST_JSON_PROMPT.format(
     TRANSCRIPT=TRANSCRIPT,
     COMP=COMP,
-    CONTACTS=PHONE_BOOK,
+    CONTACTS=json.dumps(PHONE_BOOK),
     SCHEMA=Company.model_json_schema()
 )
 

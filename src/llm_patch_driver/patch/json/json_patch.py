@@ -7,7 +7,9 @@ import jsonpatch
 import json
 
 from ..base_patch import BasePatch, PatchBundle, PatchPrompts
-from llm_patch_driver.patch_target.target import PatchTarget
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from llm_patch_driver.patch_target.target import PatchTarget
 from .prompts import JSON_ANNOTATION_TEMPLATE, JSON_PATCH_SYNTAX, ANNOTATION_PLACEHOLDER
 
 _JSON_PRIM_TYPES = Union[str, StrictInt, StrictBool, StrictFloat, None]
@@ -60,7 +62,7 @@ class JsonPatch(BasePatch):
 
         return JsonPatchBundle
 
-    def apply_patch(self, patch_target: PatchTarget) -> None:
+    def apply_patch(self, patch_target: 'PatchTarget') -> None:
         path = patch_target._lookup_map[self.a_id]
 
         if self.i_id is not None:

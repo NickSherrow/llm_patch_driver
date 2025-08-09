@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, Field, model_validator, PrivateAttr, ValidationInfo
 from typing import List, Literal, Type, ClassVar
 from sortedcontainers import SortedDict
 from ..base_patch import BasePatch, PatchPrompts, PatchBundle
 from .prompts import STR_ANNOTATION_TEMPLATE, STR_PATCH_SYNTAX, ANNOTATION_PLACEHOLDER
 
-from llm_patch_driver.patch_target.target import PatchTarget
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from llm_patch_driver.patch_target.target import PatchTarget
 
 import spacy
 
@@ -52,13 +56,13 @@ class StrPatch(BasePatch):
     # Internal cache of parsed tids for fast access during apply phase
     _parsed_tids: List[tuple[int, int]] = PrivateAttr()
 
-    @property
-    def bundle_schema(self) -> Type[PatchBundle]:
+    @classmethod
+    def get_bundle_schema(cls) -> Type[PatchBundle]:
        
         class StrPatchBundle(PatchBundle):
             patches: List[StrPatch]
 
-            __doc__ = f"Patch bundle. Syntax: {StrPatch.prompts.syntax}"
+            __doc__ = f"Patch bundle. Syntax: {cls.prompts.syntax}"
 
             def model_post_init(self, __context):
                 """Sort patches to keep coordinate validity: replacements first, then deletes, then inserts."""
@@ -82,7 +86,7 @@ class StrPatch(BasePatch):
 
         return StrPatchBundle
 
-    def apply_patch(self, patch_target: PatchTarget) -> None:
+    def apply_patch(self, patch_target: 'PatchTarget') -> None:
         match self.operation:
             # -- replace -------------------------------------------------- #
             case ReplaceOp(pattern=pat, replacement=repl):
@@ -127,22 +131,22 @@ class StrPatch(BasePatch):
         sent_map: SortedDict = SortedDict()
         lines = text.splitlines()
         for line_idx, doc in enumerate(NLP.pipe(lines), start=1):
-            # Keep sentences exactly as they appear in the original text.
-            line_sents: List[str] = [s.text for s in doc.sents] or [lines[line_idx - 1]]
+            line_sents: List[str] = [s.text_with_ws for s in doc.sents] or [lines[line_idx - 1]]
             sent_map[line_idx] = SortedDict({sid: s for sid, s in enumerate(line_sents, start=1)})
 
         return sent_map
     
     @classmethod
-    def build_annotation(cls, map: SortedDict) -> str:
+    def build_annotation(cls, data: str, map: SortedDict) -> str:
         """Assemble an annotated text from a sentence map.
 
         Used for LLM prompts to help LLMs modify the text.
         """
         annotated_parts: List[str] = []
         for line_id, line_map in map.items(): 
-            for sent_id, sent in line_map.items():            
-                annotated_parts.append(f"<tid={line_id}_{sent_id}>{sent}</tid>")
+            for sent_id, sent in line_map.items():
+                display_sentence = sent.rstrip()
+                annotated_parts.append(f"<tid={line_id}_{sent_id}>{display_sentence}</tid>")
 
         return "\n".join(annotated_parts)
     

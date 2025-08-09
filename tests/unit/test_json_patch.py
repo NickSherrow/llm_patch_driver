@@ -5,9 +5,8 @@ import pytest
 import asyncio
 from pydantic import ValidationError
 
-from llm_patch_driver.patch_schemas.json_patch import JsonPatch
+from llm_patch_driver.patch.json.json_patch import JsonPatch
 from llm_patch_driver.patch_target.target import PatchTarget
-from llm_patch_driver.driver.driver import PatchDriver
 from pydantic import BaseModel, RootModel
 
 
@@ -26,13 +25,15 @@ class DummySchema(RootModel[dict]):
     root: dict
 
 
-def _get_a_id(driver: PatchDriver, json_pointer: str) -> int:
-    """Return attribute id (``a_id``) from driver's internal map for a pointer."""
+def _get_a_id(target_lookup_map, json_pointer: str) -> int:
+    """Return attribute id (``a_id``) from target's internal map for a pointer."""
 
-    for a_id, pointer in driver._map.items():  # pylint: disable=protected-access
+    for a_id, pointer in target_lookup_map.items():  # pylint: disable=protected-access
         if pointer == json_pointer:
             return a_id
-    raise KeyError(f"Could not find pointer {json_pointer} in driver's map: {driver._map}")
+    raise KeyError(
+        f"Could not find pointer {json_pointer} in target's map: {target_lookup_map}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,14 +56,9 @@ def sample_json():
 
 @pytest.fixture()
 
-def patch_driver(sample_json):
-    """Return a PatchDriver initialised in JsonPatch mode for *sample_json*."""
-
-    target = PatchTarget[dict](
-        object=deepcopy(sample_json),
-        validation_schema=DummySchema,  # triggers JsonPatch pathway
-    )
-    return PatchDriver(target)
+def json_lookup_map(sample_json):
+    """Build a lookup map for the sample JSON without constructing `PatchTarget`."""
+    return JsonPatch.build_map(sample_json)
 
 
 # ---------------------------------------------------------------------------
@@ -94,58 +90,52 @@ def test_json_patch_deserialization_invalid():
 # Patch application tests via PatchDriver
 # ---------------------------------------------------------------------------
 
-def test_replace_root_value(patch_driver):
+def test_replace_root_value(json_lookup_map, sample_json):
     """Replacing a top-level scalar value works."""
 
-    name_id = _get_a_id(patch_driver, "/name")
+    name_id = _get_a_id(json_lookup_map, "/name")
     patch = JsonPatch(op="replace", a_id=name_id, i_id=None, value="Bob")
-
-    bundle = patch_driver.patch_schema(patches=[patch])
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
-
-    assert patch_driver.patched_object["name"] == "Bob"
+    dummy_target = type("T", (), {"content": deepcopy(sample_json), "_lookup_map": json_lookup_map})()
+    patch.apply_patch(dummy_target)  # type: ignore[arg-type]
+    assert dummy_target.content["name"] == "Bob" # type: ignore[attr-defined]
 
 
-def test_add_list_element(patch_driver):
+def test_add_list_element(json_lookup_map, sample_json):
     """Adding a new element to an array appends the value at the correct index."""
 
-    hobbies_id = _get_a_id(patch_driver, "/details/hobbies")
+    hobbies_id = _get_a_id(json_lookup_map, "/details/hobbies")
     # existing list has 2 items – use index 3 (1-based) to append at the end
     patch = JsonPatch(op="add", a_id=hobbies_id, i_id=3, value="painting")
 
-    bundle = patch_driver.patch_schema(patches=[patch])
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
-
-    assert patch_driver.patched_object["details"]["hobbies"] == [
+    dummy_target = type("T", (), {"content": deepcopy(sample_json), "_lookup_map": json_lookup_map})()
+    patch.apply_patch(dummy_target)  # type: ignore[arg-type]
+    assert dummy_target.content["details"]["hobbies"] == [ # type: ignore[attr-defined]
         "reading",
         "chess",
-        "painting",
-    ]
+        "painting", 
+    ] 
 
 
-def test_remove_object_key(patch_driver):
+def test_remove_object_key(json_lookup_map, sample_json):
     """Removing a nested object attribute deletes the key."""
 
-    city_id = _get_a_id(patch_driver, "/details/city")
+    city_id = _get_a_id(json_lookup_map, "/details/city")
     patch = JsonPatch(op="remove", a_id=city_id, i_id=None, value=None)
-
-    bundle = patch_driver.patch_schema(patches=[patch])
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
-
-    assert "city" not in patch_driver.patched_object["details"]
+    dummy_target = type("T", (), {"content": deepcopy(sample_json), "_lookup_map": json_lookup_map})()
+    patch.apply_patch(dummy_target)  # type: ignore[arg-type]
+    assert "city" not in dummy_target.content["details"] # type: ignore[attr-defined]
 
 
-def test_remove_list_element(patch_driver):
+def test_remove_list_element(json_lookup_map, sample_json):
     """Removing an element from a list updates the array correctly."""
 
-    hobbies_id = _get_a_id(patch_driver, "/details/hobbies")
+    hobbies_id = _get_a_id(json_lookup_map, "/details/hobbies")
     # remove first element (index 1 -> underlying json pointer index 0)
     patch = JsonPatch(op="remove", a_id=hobbies_id, i_id=1, value=None)
 
-    bundle = patch_driver.patch_schema(patches=[patch])
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
-
-    assert patch_driver.patched_object["details"]["hobbies"] == ["chess"]
+    dummy_target = type("T", (), {"content": deepcopy(sample_json), "_lookup_map": json_lookup_map})()
+    patch.apply_patch(dummy_target)  # type: ignore[arg-type]
+    assert dummy_target.content["details"]["hobbies"] == ["chess"] # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -153,13 +143,13 @@ def test_remove_list_element(patch_driver):
 # ---------------------------------------------------------------------------
 
 
-def test_apply_multiple_json_patches_bundle(patch_driver):
+def test_apply_multiple_json_patches_bundle(json_lookup_map, sample_json):
     """Applying several JsonPatch operations in a single bundle should yield the expected final state."""
 
     # Helper IDs for the JSON pointers we want to modify.
-    name_id = _get_a_id(patch_driver, "/name")
-    hobbies_id = _get_a_id(patch_driver, "/details/hobbies")
-    city_id = _get_a_id(patch_driver, "/details/city")
+    name_id = _get_a_id(json_lookup_map, "/name")
+    hobbies_id = _get_a_id(json_lookup_map, "/details/hobbies")
+    city_id = _get_a_id(json_lookup_map, "/details/city")
 
     patch_replace_name = JsonPatch(op="replace", a_id=name_id, i_id=None, value="Bob")
     patch_add_hobby = JsonPatch(op="add", a_id=hobbies_id, i_id=3, value="painting")
@@ -168,11 +158,9 @@ def test_apply_multiple_json_patches_bundle(patch_driver):
     # Provide patches in arbitrary order – JsonPatch.bundle_builder currently
     # preserves order, but the operations are independent so order should not
     # affect the final outcome.
-    bundle = patch_driver.patch_schema(
-        patches=[patch_remove_city, patch_add_hobby, patch_replace_name]  # type: ignore[arg-type]
-    )
-
-    asyncio.run(patch_driver.apply_patch_bundle(bundle))
+    dummy_target = type("T", (), {"content": deepcopy(sample_json), "_lookup_map": json_lookup_map})()
+    for p in [patch_remove_city, patch_add_hobby, patch_replace_name]:
+        p.apply_patch(dummy_target)  # type: ignore[arg-type]
 
     expected_result = {
         "name": "Bob",
@@ -181,4 +169,4 @@ def test_apply_multiple_json_patches_bundle(patch_driver):
         },
     }
 
-    assert patch_driver.patched_object == expected_result
+    assert dummy_target.content == expected_result # type: ignore[attr-defined]

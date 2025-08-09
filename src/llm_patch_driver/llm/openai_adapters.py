@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
+from glom import glom
 
 from llm_patch_driver.llm.base_adapter import BaseApiAdapter
 from llm_patch_driver.llm.schemas import ToolCallRequest, ToolCallResponse, Message, ToolSchema
 
 U = TypeVar("U", bound=BaseModel)
-
 
 class OpenAIChatCompletions(BaseApiAdapter):
     """Adapter for OpenAI Chat Completions API."""
@@ -36,10 +36,27 @@ class OpenAIChatCompletions(BaseApiAdapter):
         for msg in messages:
             match msg:
                 case Message():
-                    msg_dict = {
-                        "role": msg.role,
-                        "content": msg.content
-                    }
+                    msg_dict: Dict[str, Any] = {"role": msg.role}
+
+                    # Attach content only if not None
+                    if msg.content is not None:
+                        msg_dict["content"] = msg.content
+
+                    # Attach tool_calls if present on the message
+                    if msg.tool_calls:
+                        formatted_tool_calls = []
+                        for tool_call in msg.tool_calls:
+                            tc = {
+                                "id": tool_call.id,
+                                "type": tool_call.type,
+                                "function": {
+                                    "name": tool_call.name,
+                                    "arguments": tool_call.arguments,
+                                },
+                            }
+                            formatted_tool_calls.append(tc)
+                        msg_dict["tool_calls"] = formatted_tool_calls
+
                 case ToolCallResponse():
                     msg_dict = {
                         "role": "tool",
@@ -73,29 +90,31 @@ class OpenAIChatCompletions(BaseApiAdapter):
     def parse_llm_output(self, raw_response: Any) -> Message:
         """Parse OpenAI Chat Completions response into Message."""
         
-        # Extract message from choices[0].message
-        message_data = raw_response["choices"][0]["message"]
+        # Extract message from choices.0.message (robust to dicts or objects)
+        message_data = glom(raw_response, "choices.0.message", default={})
         
         # Extract tool calls if present
-        tool_calls = message_data.get("tool_calls", [])
+        tool_calls = glom(message_data, "tool_calls", default=[])
         
         # Parse tool calls into ToolCallRequest format
         parsed_tool_calls = []
         if tool_calls:
             for tool_call in tool_calls:
-                parsed_tool_calls.append(ToolCallRequest(
-                    type=tool_call["type"],
-                    id=tool_call["id"],
-                    name=tool_call["function"]["name"],
-                    arguments=tool_call["function"]["arguments"]
-                ))
+                parsed_tool_calls.append(
+                    ToolCallRequest(
+                        type=glom(tool_call, "type", default="function"),
+                        id=glom(tool_call, "id", default=""),
+                        name=glom(tool_call, "function.name", default=""),
+                        arguments=glom(tool_call, "function.arguments", default=""),
+                    )
+                )
         
         # Check for structured output (parsed object)
-        structured_output = raw_response.get("parsed")
+        structured_output = glom(raw_response, "parsed", default=None)
         
         return Message(
-            role=message_data.get("role", "assistant"),
-            content=message_data.get("content", ""),
+            role=glom(message_data, "role", default="assistant"),
+            content=glom(message_data, "content", default=""),
             tool_calls=parsed_tool_calls,
             attached_object=structured_output
         )
@@ -108,21 +127,24 @@ class OpenAIChatCompletions(BaseApiAdapter):
         for msg in messages:
             # Extract tool calls if present
             tool_calls = []
-            if "tool_calls" in msg:
-                for tool_call in msg["tool_calls"]:
-                    tool_calls.append(ToolCallRequest(
-                        type=tool_call.get("type", "function"),
-                        id=tool_call.get("id", ""),
-                        name=tool_call.get("function", {}).get("name", ""),
-                        arguments=tool_call.get("function", {}).get("arguments", "")
-                    ))
+            msg_tool_calls = glom(msg, "tool_calls", default=[])
+            if msg_tool_calls:
+                for tool_call in msg_tool_calls:
+                    tool_calls.append(
+                        ToolCallRequest(
+                            type=glom(tool_call, "type", default="function"),
+                            id=glom(tool_call, "id", default=""),
+                            name=glom(tool_call, "function.name", default=""),
+                            arguments=glom(tool_call, "function.arguments", default=""),
+                        )
+                    )
             
             # Check for structured output in the message
-            structured_output = msg.get("parsed")
+            structured_output = glom(msg, "parsed", default=None)
             
             parsed_messages.append(Message(
-                role=msg.get("role", "user"),
-                content=msg.get("content", ""),
+                role=glom(msg, "role", default="user"),
+                content=glom(msg, "content", default=""),
                 tool_calls=tool_calls,
                 attached_object=structured_output
             ))
@@ -197,32 +219,34 @@ class OpenAIResponses(BaseApiAdapter):
         """Parse OpenAI Responses API response into Message."""
         
         # Extract tool calls by filtering output array for function_call type
-        output_items = raw_response.get("output", [])
-        tool_calls_data = [item for item in output_items if item.get("type") == "function_call"]
+        output_items = glom(raw_response, "output", default=[])
+        tool_calls_data = [item for item in output_items if glom(item, "type", default=None) == "function_call"]
         
         # Parse tool calls into ToolCallRequest format
         parsed_tool_calls = []
         for tool_call in tool_calls_data:
-            parsed_tool_calls.append(ToolCallRequest(
-                type=tool_call["type"],
-                id=tool_call["call_id"],
-                name=tool_call["name"],
-                arguments=tool_call["arguments"]
-            ))
+            parsed_tool_calls.append(
+                ToolCallRequest(
+                    type=glom(tool_call, "type", default="function_call"),
+                    id=glom(tool_call, "call_id", default=""),
+                    name=glom(tool_call, "name", default=""),
+                    arguments=glom(tool_call, "arguments", default=""),
+                )
+            )
         
         # Extract message by filtering for message type
         message_data = {}
         for item in output_items:
-            if item.get("type") == "message":
+            if glom(item, "type", default=None) == "message":
                 message_data = item
                 break
         
         # Check for structured output (parsed object)
-        structured_output = raw_response.get("output_parsed")
+        structured_output = glom(raw_response, "output_parsed", default=None)
         
         return Message(
-            role=message_data.get("role", "assistant"),
-            content=message_data.get("content", ""),
+            role=glom(message_data, "role", default="assistant"),
+            content=glom(message_data, "content", default=""),
             tool_calls=parsed_tool_calls,
             attached_object=structured_output
         )
@@ -235,20 +259,22 @@ class OpenAIResponses(BaseApiAdapter):
         for msg in messages:
             # Responses API has different tool call structure
             tool_calls = []
-            if msg.get("type") == "function_call":
-                tool_calls.append(ToolCallRequest(
-                    type=msg.get("type", "function_call"),
-                    id=msg.get("call_id", ""),
-                    name=msg.get("name", ""),
-                    arguments=msg.get("arguments", "")
-                ))
+            if glom(msg, "type", default=None) == "function_call":
+                tool_calls.append(
+                    ToolCallRequest(
+                        type=glom(msg, "type", default="function_call"),
+                        id=glom(msg, "call_id", default=""),
+                        name=glom(msg, "name", default=""),
+                        arguments=glom(msg, "arguments", default=""),
+                    )
+                )
             
             # Check for structured output in the message
-            structured_output = msg.get("output_parsed")
+            structured_output = glom(msg, "output_parsed", default=None)
             
             parsed_messages.append(Message(
-                role=msg.get("role", "user"),
-                content=msg.get("content", ""),
+                role=glom(msg, "role", default="user"),
+                content=glom(msg, "content", default=""),
                 tool_calls=tool_calls,
                 attached_object=structured_output
             ))

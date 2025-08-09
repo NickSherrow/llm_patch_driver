@@ -9,7 +9,7 @@ from phoenix.otel import register
 from llm_patch_driver import config, PatchDriver
 from .test_json_assets import json_target, messages
 
-logging.basicConfig(level=logging.DEBUG, handlers=[RichHandler(rich_tracebacks=True, markup=True,)])
+logging.basicConfig(level=logging.INFO, handlers=[RichHandler(rich_tracebacks=True, markup=True,)])
 logging.getLogger("openai").setLevel(logging.WARNING)
 
 phoenix_provider = register(
@@ -27,10 +27,10 @@ async def json_test():
     error = await json_target.validate_content()
 
     if error:
+        json_target.current_error = error  # needed so the loop starts
         create_method = OpenAI().chat.completions.create
-        model_args = {'model': 'gpt-4.1'}
         parse_method = OpenAI().chat.completions.parse
-        driver = PatchDriver(json_target, create_method, parse_method, model_args)
+        driver = PatchDriver(json_target, create_method, parse_method, {'model': 'gpt-5-mini'})
         await driver.run_patching_loop(messages)
         print("===== ORIGINAL STATE =====")
         print(json_target.content)

@@ -31,19 +31,22 @@ tracer is available via the module-level *collector* variable (see
 
 import inspect
 import sys
+import json
+
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING
-import json
 
 import nanoid
+
 from rich.pretty import pretty_repr
 from rich.console import RenderableType, Console
 from opentelemetry.trace import StatusCode
+from openinference.semconv.trace import MessageAttributes, SpanAttributes
+from openinference.instrumentation._spans import OpenInferenceSpan
 
 # Initialize a shared Rich Console instance for pretty output
 _rich_console = Console()
-from openinference.instrumentation._spans import OpenInferenceSpan
 
 if TYPE_CHECKING:  # pragma: no cover
     from llm_patch_driver.config import LogCollector
@@ -83,7 +86,7 @@ class ArgSpec:
     name: str
     agg: Optional[Callable[[Any], Any]] = None
     logger_level: Optional[Literal["DEBUG", "INFO"]] = None
-    otel_attribute: Optional[Literal["input", "metadata"]] = None
+    otel_attribute: Optional[Literal["input", "metadata", "messages"]] = None
     rich_console: Callable[..., RenderableType] | None = None
 
 @dataclass
@@ -91,7 +94,7 @@ class ArgLogData:
     name: str
     value: Any
     logger_level: Literal["DEBUG", "INFO"] | None = None
-    otel_attribute: Literal["input", "metadata"] | None = None
+    otel_attribute: Literal["input", "metadata", "messages"] | None = None
     rich_console: RenderableType | None = None
 
 
@@ -105,7 +108,7 @@ class OutputFormat:
     """Output format for the log data."""
     rich_console: Callable[..., RenderableType] | None = None
     logger_level: Literal["DEBUG", "INFO"] | None = None
-    otel_output: bool = False
+    otel_output: Literal["output", "messages"] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +297,10 @@ def log_wrapper(
                 arg_data.name: arg_data.value 
                 for arg_data in log_data.payload if arg_data.otel_attribute == "input"
                 }
+            
+            span_messages = [
+                arg_data.value for arg_data in log_data.payload if arg_data.otel_attribute == "messages"
+            ]
 
             if span_meta:
                 span.set_attribute("metadata", json.dumps(span_meta))
@@ -301,10 +308,59 @@ def log_wrapper(
             if span_input:
                 span.set_input(span_input)
 
+            if span_messages: #TODO: move to messages
+                for message_pack in span_messages: 
+                    for idx, msg in enumerate(message_pack):
+                        if hasattr(msg, "role"):
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
+                                msg.role,
+                            )
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
+                                msg.content,
+                            )
+                            if msg.tool_calls:
+                                for tidx, tool_call in enumerate(msg.tool_calls):
+                                    span.set_attribute(
+                                        f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tidx}.{MessageAttributes.MESSAGE_FUNCTION_CALL_NAME}",
+                                        tool_call.name,
+                                    )
+                                    span.set_attribute(
+                                        f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tidx}.{MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON}",
+                                        tool_call.arguments,
+                                    )
+                        elif hasattr(msg, "output"):
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_ROLE}",
+                                "function",
+                            )
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}.{MessageAttributes.MESSAGE_CONTENT}",
+                                msg.output,
+                            )
+
         def span_success(span: OpenInferenceSpan, result: Any):
             span.set_status(StatusCode.OK)
-            if log_output and log_output.otel_output:
-                span.set_output(str(result))
+
+            match log_output:
+                case OutputFormat(otel_output="output"):
+                    span.set_output(str(result))
+
+                case OutputFormat(otel_output="messages"):
+                    span.set_attribute(SpanAttributes.OUTPUT_VALUE, result.content)
+                    span.set_attribute(f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_ROLE}", result.role)
+                    span.set_attribute(f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_CONTENT}", result.content)
+                    if result.tool_calls:
+                        for tidx, tool_call in enumerate(result.tool_calls):
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tidx}.{MessageAttributes.MESSAGE_FUNCTION_CALL_NAME}",
+                                tool_call.name,
+                            )
+                            span.set_attribute(
+                                f"{SpanAttributes.LLM_OUTPUT_MESSAGES}.0.{MessageAttributes.MESSAGE_TOOL_CALLS}.{tidx}.{MessageAttributes.MESSAGE_FUNCTION_CALL_ARGUMENTS_JSON}",
+                                tool_call.arguments,
+                            )
 
         def span_failure(span: OpenInferenceSpan, exc: Exception):
             span.set_status(StatusCode.ERROR)

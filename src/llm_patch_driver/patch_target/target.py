@@ -1,4 +1,6 @@
-from typing import Generic, Type, Callable, Optional, Coroutine, Any, TypeVar, List, Dict, cast, TYPE_CHECKING
+from __future__ import annotations
+
+from typing import Generic, Type, Callable, Optional, Coroutine, Any, TypeVar, List, Dict, cast
 from pydantic import BaseModel, model_validator, ValidationError, PrivateAttr
 from sortedcontainers import SortedDict
 from copy import deepcopy
@@ -10,8 +12,7 @@ from llm_patch_driver.llm.schemas import Message
 
 T = TypeVar("T")
 
-if TYPE_CHECKING:
-    from llm_patch_driver.patch.base_patch import BasePatch
+from llm_patch_driver.patch.base_patch import BasePatch
 
 # --------------------------------------------------------------------- #
 # DATA WRAPPER CLASS
@@ -35,7 +36,7 @@ class PatchTarget(BaseModel, Generic[T]):
     def model_post_init(self, __context):
         self._backup_copy = deepcopy(self.content)
         self._lookup_map = self.patch_type.build_map(self.content)
-        self._annotated = self.patch_type.build_annotation(self._lookup_map)
+        self._annotated = self.patch_type.build_annotation(self.content, self._lookup_map)
 
     @property
     def content(self) -> Any:
@@ -87,7 +88,7 @@ class PatchTarget(BaseModel, Generic[T]):
         self.content = deepcopy(self._backup_copy)
         self._iteration = 0
         self._lookup_map = self.patch_type.build_map(self.content)
-        self._annotated = self.patch_type.build_annotation(self._lookup_map)
+        self._annotated = self.patch_type.build_annotation(self.content, self._lookup_map)
         self.current_error = await self.validate_content()
     
     async def apply_patches(self, patches: List['BasePatch']) -> None:
@@ -98,7 +99,7 @@ class PatchTarget(BaseModel, Generic[T]):
 
         self._iteration += 1
         self._lookup_map = self.patch_type.build_map(self.content)
-        self._annotated = self.patch_type.build_annotation(self._lookup_map)
+        self._annotated = self.patch_type.build_annotation(self.content, self._lookup_map)
 
     async def validate_content(self) -> str | None:
         """Validate the object against the validation schema or condition."""
