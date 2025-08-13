@@ -8,3 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+.env
+.env.*
+!.env.example
+
+# Cursor
+.cursor

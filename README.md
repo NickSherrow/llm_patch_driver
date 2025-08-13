@@ -12,6 +12,68 @@ This library is framework/client agnostic and allows you to add your own patch t
 3. Your prompt has too many instructions and conditions that must be met.
 4. Your desired response from LLM is too big for the output window.
 
+**Installation**:
+```bash
+pip install llm-patch-driver
+```
+
+Or with uv:
+```bash
+uv add llm-patch-driver
+```
+
+## Quick Example
+
+**Set up the patch target and driver.**
+
+```python
+import openai
+from llm_patch_driver import PatchTarget, PatchDriver, StrPatch
+
+client = openai.OpenAI()
+
+# Create a patch target for your content
+target = PatchTarget(
+    object="The quick brown fox jumps over the lazy dog.",
+    patch_type=StrPatch
+)
+
+# Set up the driver with your LLM client
+driver = PatchDriver(
+    target_object=target,
+    create_method=client.chat.completions.create,
+    parse_method=client.beta.chat.completions.parse,
+    model_args={'model': 'gpt-4o-mini'},
+)
+```
+
+**Option 1: Request a patch using a query and apply it to the target**
+
+```python
+patch_bundle = await driver.request_patch_bundle(
+    query="Replace 'brown' with 'red' and 'lazy' with 'sleepy'"
+)
+await target.apply_patches(patch_bundle.patches)
+
+print(target.object)  # "The quick red fox jumps over the sleepy dog."
+```
+
+**Option 2: Provide a validation condition and run the patching loop to ensure the required number of words is met**
+
+```python
+def word_count_validator(text: str) -> str | None:
+    word_count = len(text.split())
+    if word_count < 55:
+        return f"The poem must be at least 55 words, currently has {word_count} words"
+    return None
+
+target.validation_condition = word_count_validator
+
+await driver.run_patching_loop(messages)
+
+print(target.object)  # "The quick red fox jumps over the sleepy dog. Then, with nimble paws and a glint in its eye, the fox danced through fields of gold, beneath a sky painted with dawn’s first light. Birds sang, dew sparkled, and the world awoke as the fox’s journey continued, weaving a story exactly fifty-five words long. Joyful."
+```
+
 **Applications**:
 1. Creating and updating graphs.
 2. Generating and updating long documents.
