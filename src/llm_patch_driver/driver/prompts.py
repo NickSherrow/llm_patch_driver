@@ -12,8 +12,8 @@ with patch operations that will transform the text so it satisfies the request.
 3. Generate patches to fulfill the modification request as closely as possible.
 4. Follow the patch syntax as closely as possible.
 
-
 # Guidelines
+
 1. The <query> section explains *exactly* what must change. Do not introduce additional, unrequested modifications.
 2. The <context> section may contain auxiliary information that helps you locate the correct portion of the text. Use it, but do not treat it as text to be edited (unless explicitly stated).
 3. The <annotated_data> section is the current state of the object that was augmented with a set of tags to help you modify it. If it is a text, it was annotated with <tid> tags. If it is a JSON, it was annotated with <a> and <i> tags. Use these IDs to generate patches. Only you see these tags. They will dissapear after the patching process.
@@ -42,6 +42,20 @@ PATCHING_LOOP_SYSTEM_PROMPT = """
 <new_goal>
     Your goal is to fix your mistakes and modify the response so it passes the validation without error messages.
 </new_goal>
+
+## DEBUGGING INSTRUCTIONS
+
+1. Find out what you did wrong in your initial response
+2. Fix the data using the tools
+3. Repeat until the data passes the validation without error messages
+
+Bad debugging means:
+- You only focus on the error message and only try to fix it without understanding the context of the error
+- You give up because you think the data is too complex to fix
+
+Good debugging means:
+- You reread the original task and the error message, and fixed the root problem
+- You are persistent and keep trying until the data passes the validation without error messages
 
 <debugging_process_overview>
     1. Below you will find a debugging state of the data. It contains information about error, and annotated version of the corrupted response.

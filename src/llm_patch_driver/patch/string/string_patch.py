@@ -74,8 +74,11 @@ class StrPatch(BasePatch):
                 }
 
                 def _anchor_line(patch: StrPatch) -> int:
-                    anchor_tid = patch.tids[-1] if patch.operation.type == "insert_after" else patch.tids[0]
-                    return int(anchor_tid.split("_")[0])
+                    # Inserts anchor to the last tid's line; deletes/replaces anchor to the highest referenced line
+                    if patch.operation.type == "insert_after":
+                        anchor_tid = patch.tids[-1]
+                        return int(anchor_tid.split("_")[0])
+                    return max(int(t.split("_")[0]) for t in patch.tids)
 
                 # Sort patches to keep coordinate validity: replacements first, then deletes, then inserts.
                 sorted_patches = sorted(

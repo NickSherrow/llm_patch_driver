@@ -5,21 +5,44 @@ from pydantic import BaseModel, model_validator, ValidationError, PrivateAttr
 from sortedcontainers import SortedDict
 from copy import deepcopy
 import inspect
-import spacy
 
 from .prompts import ERROR_TEMPLATE
 from llm_patch_driver.llm.schemas import Message
+from llm_patch_driver.patch.base_patch import BasePatch
 
 T = TypeVar("T")
 
-from llm_patch_driver.patch.base_patch import BasePatch
-
-# --------------------------------------------------------------------- #
-# DATA WRAPPER CLASS
-# --------------------------------------------------------------------- #
-
 class PatchTarget(BaseModel, Generic[T]):
-    """Container for the object to be patched."""
+    """Wrapper for a target object that needs to be patched.
+
+    Handles the following:
+    - Checks if the target object passes the validation schema or condition.
+    - Annotates the target object with metadata that helps LLM to understand it better.
+    - Stores backup copy of the target object to be able to reset to the original state.
+    - Applies generated patches to the target object.
+
+    Args:
+    - **object**: The object to patch. If ``content_attribute`` is ``None``, the
+      object itself is treated as the content. Otherwise, the named attribute of
+      the object is treated as the content.
+    - **patch_type**: any class that implements ``BasePatch`` interface.
+    - **current_error**: Optional latest validation error string.
+    - **content_attribute**: Optional attribute name indicating where the
+      content lives on ``object`` when the content is nested.
+    - **validation_condition**: Optional sync or async callable that receives the
+      current content and returns an error message (``str``) or ``None`` if the
+      content is valid.
+    - **validation_schema**: Optional Pydantic model used to validate the
+      content. Required when the content is not a ``str``.
+
+    Methods:
+    - ``reset_to_original_state``: resets the target object to the original state.
+    - ``apply_patches``: applies a list of patches to the target object.
+    - ``validate_content``: validates the target object against the validation schema or condition.
+
+    Notes:
+    - All modifications happen in place.
+    """
 
     object: T
     patch_type: Type['BasePatch']

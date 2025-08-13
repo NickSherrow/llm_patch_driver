@@ -1,19 +1,21 @@
 [project]
 name = "llm-patch-driver"
 version = "0.1.0"
-description = "Add your description here"
+description = "LLM Patch Driver is a framework for patching data objects using LLMs. It can generate and apply a single patch, or start the patching loop to fix complex validation issues."
 readme = "README.md"
+license = { file = "LICENSE" }
 authors = [
-    { name = "RealNickSheero", email = "nick@tensorsense.com" }
+    { name = "Nikita Shirobokov", email = "shirobokov@me.com" }
 ]
 requires-python = ">=3.12"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
 dependencies = [
-    "arize-phoenix-otel>=0.12.1",
     "glom>=24.11.0",
     "jsonpatch>=1.33",
     "nanoid>=2.0.0",
     "pydantic>=2.11.7",
-    "rich>=14.0.0",
     "sortedcontainers>=2.4.0",
     "spacy>=3.8.7",
 ]
@@ -22,15 +24,35 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_patch_driver"]
+
+[tool.hatch.build]
+include = [
+  "src/llm_patch_driver/py.typed",
+]
+
 [dependency-groups]
 dev = [
+    "arize-phoenix-otel>=0.12.1",
     "dotenv>=0.9.9",
     "email-validator>=2.2.0",
+    "google>=3.0.0",
+    "google-auth>=2.40.3",
+    "google-genai>=1.29.0",
     "llm-patch-driver",
     "openai>=1.93.2",
+    "openinference-instrumentation-google-genai>=0.1.5",
+    "openinference-instrumentation-openai>=0.1.30",
+    "openinference-instrumentation-vertexai>=0.1.11",
     "pytest>=8.4.1",
     "pytest-asyncio>=0.23.6",
 ]
 
 [tool.uv.sources]
 llm-patch-driver = { workspace = true }
+
+[project.urls]
+Homepage = "https://github.com/NickSherrow/llm_patch_driver"
+Repository = "https://github.com/NickSherrow/llm_patch_driver"
+Issues = "https://github.com/NickSherrow/llm_patch_driver"

@@ -8,6 +8,7 @@ import json
 
 from ..base_patch import BasePatch, PatchBundle, PatchPrompts
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from llm_patch_driver.patch_target.target import PatchTarget
 from .prompts import JSON_ANNOTATION_TEMPLATE, JSON_PATCH_SYNTAX, ANNOTATION_PLACEHOLDER
@@ -32,7 +33,7 @@ class JsonPatch(BasePatch):
 
     op: Literal["add", "remove", "replace"] = Field(
         ...,
-        description="The operation to be performed. Must be one of 'add', 'remove', 'replace'.",
+        description="The operation to be performed.",
     )
     a_id: int = Field(
         ...,
@@ -195,20 +196,20 @@ class JsonPatch(BasePatch):
 
         return original_data
 
-    @model_validator(mode="after")
-    def _check_ops(self):
-        """Check that the anchor and index ids are valid."""
+    # @model_validator(mode="after")
+    # def _check_ops(self):
+    #     """Check that the anchor and index ids are valid."""
 
-        if self.op in ["add", "replace"] and self.value is None:
-            raise ValueError("Value is required for 'add' and 'replace' operations.")
+    #     if self.op in ["add", "replace"] and self.value is None:
+    #         raise ValueError("Value is required for 'add' and 'replace' operations.")
         
-        if self.op == "remove" and self.value is not None:
-            raise ValueError("Value is not allowed for 'remove' operations.")
+    #     if self.op == "remove" and self.value is not None:
+    #         raise ValueError("Value is not allowed for 'remove' operations.")
         
-        if self.op == "replace" and self.i_id is not None:
-            raise ValueError("Index id is not allowed for 'replace' operations.")
+    #     if self.op == "replace" and self.i_id is not None:
+    #         raise ValueError("Index id is not allowed for 'replace' operations.")
         
-        return self
+    #     return self
     
     @model_validator(mode="after")
     def _check_ids(self, info: ValidationInfo):

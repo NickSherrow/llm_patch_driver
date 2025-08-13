@@ -2,34 +2,64 @@ from __future__ import annotations
 
 import inspect
 import json
-import jsonpatch
-from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Union, cast, Type, Any, Callable, TypeVar, Generic, Coroutine
+from typing import List, Optional, Type, Any, Callable, TypeVar, Generic
 
-import spacy
-from pydantic import BaseModel, Field, model_validator, PrivateAttr, ValidationError
-from sortedcontainers import SortedDict
+from pydantic import BaseModel, Field
 
 from llm_patch_driver.llm.base_adapter import BaseApiAdapter
-from llm_patch_driver.llm.schemas import ToolCallRequest, ToolCallResponse, Message, parse_history_to_rich_renderable
-from llm_patch_driver.patch.base_patch import PatchBundle, BasePatch
-from llm_patch_driver.patch.json.json_patch import JsonPatch
-from llm_patch_driver.patch.string.string_patch import ReplaceOp, DeleteOp, InsertAfterOp, StrPatch
+from llm_patch_driver.llm.schemas import ToolCallResponse, Message
+from llm_patch_driver.patch.base_patch import PatchBundle
 from llm_patch_driver.patch_target.target import PatchTarget
 from llm_patch_driver.llm.base_tool import LLMTool
 from llm_patch_driver.driver.prompts import REQUEST_PATCH_PROMPT, PATCHING_LOOP_SYSTEM_PROMPT
-from llm_patch_driver.config import config
 from llm_patch_driver.llm import OpenAIChatCompletions
-
-from llm_patch_driver.logging import log_wrapper, OutputFormat, ArgSpec, ArgLogData, LogData
-
-collector = config.build_log_collector(__name__)
 
 T = TypeVar("T", bound=Any)
 U = TypeVar("U", bound=BaseModel)
 
 class PatchDriver(Generic[T]):
-    """Maintains the sentence map and annotated view; applies patch bundles."""
+    """Orchestrates patching process.
+
+    Handles the following:
+    - Core LLM calls and tool execution.
+    - Agentic loop to iteratively fix the error.
+    - Patch generation from query or patch bundle.
+
+    Args:
+    - **target_object**: The ``PatchTarget[T]`` to operate on. Holds content,
+      annotation, validation logic, and patch application behavior.
+    - **create_method**: Callable used to create an LLM response when no
+      structured object is required (e.g., plain chat completion). May be sync
+      or async.
+    - **parse_method**: Callable used to parse an LLM response when structured
+      output (``schema``) is requested. May be sync or async.
+    - **model_args**: Optional provider/model-specific kwargs forwarded to the
+      adapter on each LLM call.
+    - **api_adapter**: Concrete implementation of ``BaseApiAdapter`` that
+      formats inputs and parses outputs for the chosen LLM API.
+    - **tools**: Optional list of ``LLMTool`` classes to pre-bind. When not
+      provided, a default set is registered (reset, query-driven modification,
+      direct patch application) and adjusted to the active patch type.
+    - **max_cycles**: Upper bound of iterations in the patching loop to prevent
+      unbounded retries.
+
+    Methods:
+    - ``run_patching_loop(message_history)``: Runs the iterative loop; executes
+      LLM-emitted tool calls and re-validates after each cycle until the target
+      becomes valid or ``max_cycles`` is reached.
+    - ``request_patch_bundle(query, context)``: Requests a ``PatchBundle`` from
+      the LLM given the annotated content and developer-provided context.
+    - ``bind_tool(tool)``: Registers a tool class. Its schema is adapted via the
+      active ``api_adapter`` so the LLM can invoke it.
+
+    Notes:
+    - All modifications happen in place on ``target_object``. The target
+      maintains a backup, annotations, and the id→content lookup map used by
+      patches.
+    - The driver is adapter-agnostic and relies on the supplied
+      ``create_method``/``parse_method`` to support both chat-only and
+      structured-output interactions.
+    """
 
     def __init__(
         self,
@@ -200,13 +230,6 @@ class PatchDriver(Generic[T]):
     # Internal LLM handling
     # --------------------------------------------------------------------- #
 
-    @log_wrapper(
-        log_input=[
-            ArgSpec(name="messages", logger_level="INFO", otel_attribute="messages", rich_console=parse_history_to_rich_renderable),
-            ArgSpec(name="tools", logger_level="INFO", otel_attribute="metadata")
-            ], 
-            log_output=OutputFormat(otel_output="messages", logger_level="INFO", rich_console=parse_history_to_rich_renderable),
-            span_kind="llm")
     async def call_llm(
         self,
         messages: List[Message], 
