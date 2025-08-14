@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, model_validator, PrivateAttr, ValidationInfo
-from typing import List, Literal, Type, ClassVar
+from typing import List, Literal, Type, ClassVar, Any
 from sortedcontainers import SortedDict
 from ..base_patch import BasePatch, PatchPrompts, PatchBundle
 from .prompts import STR_ANNOTATION_TEMPLATE, STR_PATCH_SYNTAX, ANNOTATION_PLACEHOLDER
@@ -10,13 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from llm_patch_driver.patch_target.target import PatchTarget
 
-import spacy
-
-try:
-    NLP = spacy.load("en_core_web_sm")
-except OSError:
-    NLP = spacy.blank("en")
-    NLP.add_pipe("sentencizer")
+ 
 
 string_prompts = PatchPrompts(
     syntax=STR_PATCH_SYNTAX,
@@ -55,6 +49,26 @@ class StrPatch(BasePatch):
 
     # Internal cache of parsed tids for fast access during apply phase
     _parsed_tids: List[tuple[int, int]] = PrivateAttr()
+
+    # Module-level cache for spaCy pipeline, scoped to this class
+    _NLP: ClassVar[Any] = None
+
+    @classmethod
+    def _get_nlp(cls):
+        """Return a cached spaCy pipeline, importing spaCy lazily.
+
+        Loads `en_core_web_sm` if available, otherwise uses a blank English pipeline
+        with the sentencizer. This avoids importing spaCy at module import time.
+        """
+        if cls._NLP is not None:
+            return cls._NLP
+        import spacy as _spacy
+        try:
+            cls._NLP = _spacy.load("en_core_web_sm")
+        except OSError:
+            cls._NLP = _spacy.blank("en")
+            cls._NLP.add_pipe("sentencizer")
+        return cls._NLP
 
     @classmethod
     def get_bundle_schema(cls) -> Type[PatchBundle]:
@@ -120,7 +134,8 @@ class StrPatch(BasePatch):
                     patch_target._lookup_map[idx + 1] = patch_target._lookup_map[idx]
 
                 new_line_id = anchor_line + 1
-                doc = NLP(text)
+                nlp = self._get_nlp()
+                doc = nlp(text)
                 sents = [s.text for s in doc.sents] or [text]
                 patch_target._lookup_map[new_line_id] = SortedDict({sid: s for sid, s in enumerate(sents, start=1)})
 
@@ -133,7 +148,8 @@ class StrPatch(BasePatch):
 
         sent_map: SortedDict = SortedDict()
         lines = text.splitlines()
-        for line_idx, doc in enumerate(NLP.pipe(lines), start=1):
+        nlp = cls._get_nlp()
+        for line_idx, doc in enumerate(nlp.pipe(lines), start=1):
             line_sents: List[str] = [s.text_with_ws for s in doc.sents] or [lines[line_idx - 1]]
             sent_map[line_idx] = SortedDict({sid: s for sid, s in enumerate(line_sents, start=1)})
 

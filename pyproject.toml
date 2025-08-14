@@ -14,7 +14,6 @@ classifiers = [
 dependencies = [
     "glom>=24.11.0",
     "jsonpatch>=1.33",
-    "nanoid>=2.0.0",
     "pydantic>=2.11.7",
     "sortedcontainers>=2.4.0",
     "spacy>=3.8.7",

@@ -404,6 +404,3 @@ async def validation_string_condition(current_doc: str, call_llm: Callable) -> s
     
     else:
         return None
-
-
-

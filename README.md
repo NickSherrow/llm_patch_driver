@@ -1,7 +1,5 @@
 # LLM Patch Driver
 
-## TLDR
-
 This library lets LLMs modify existing data objects (both structured and unstructured). It can generate and apply a single patch, or start the patching loop to fix complex validation issues.
 
 This library is framework/client agnostic and allows you to add your own patch types and validation logic.
@@ -21,6 +19,12 @@ Or with uv:
 ```bash
 uv add llm-patch-driver
 ```
+
+**Applications**:
+1. Creating and updating graphs.
+2. Generating and updating long documents.
+3. Modifying codebases.
+4. Data extraction with complex schemas.
 
 ## Quick Example
 
@@ -71,14 +75,15 @@ target.validation_condition = word_count_validator
 
 await driver.run_patching_loop(messages)
 
-print(target.object)  # "The quick red fox jumps over the sleepy dog. Then, with nimble paws and a glint in its eye, the fox danced through fields of gold, beneath a sky painted with dawn’s first light. Birds sang, dew sparkled, and the world awoke as the fox’s journey continued, weaving a story exactly fifty-five words long. Joyful."
+print(target.object)  # "The quick red fox jumps over the sleepy dog. Then, with nimble paws and a glint in its eye, the fox danced through fields of gold, beneath a sky painted with dawn's first light. Birds sang, dew sparkled, and the world awoke as the fox's journey continued, weaving a story exactly fifty-five words long. Joyful."
 ```
 
-**Applications**:
-1. Creating and updating graphs.
-2. Generating and updating long documents.
-3. Modifying codebases.
-4. Data extraction with complex schemas.
+## Examples
+
+For comprehensive examples showing real-world usage:
+
+- **String Patching**: See [tests/end_to_end/test_string.py](tests/end_to_end/test_string.py) for examples of text modification, validation, and complex string operations
+- **JSON Patching**: See [tests/end_to_end/test_json.py](tests/end_to_end/test_json.py) for examples of structured data modification with Pydantic schemas and complex object validation
 
 ## Components
 
@@ -95,7 +100,7 @@ The library includes the following components:
 **Description:**
 PatchTarget is a wrapper around data objects that need to be modified. It acts as a smart container that holds your target content, validation logic, and patch application behavior. The component automatically creates backup copies, generates annotations for LLM understanding, and maintains lookup maps for efficient patching.
 
-Key responsibilities:
+**Key responsibilities**:
 - Validates content against Pydantic schemas or custom validation functions  
 - Annotates content with metadata to help LLMs understand structure
 - Stores backup copies for reset functionality
@@ -148,7 +153,7 @@ doc_target = PatchTarget(
 **Description:**
 PatchDriver is the orchestration engine that coordinates the entire patching process. It handles LLM communication, executes tool calls, and runs the iterative patching loop until validation succeeds or maximum cycles are reached. The driver is LLM-provider agnostic through the adapter pattern.
 
-Key responsibilities:
+**Key responsibilities**:
 - Executes LLM calls using provided create/parse methods
 - Manages the autonomous patching loop with error handling
 - Supports both single patch generation and iterative fixing
@@ -203,7 +208,7 @@ BaseApiAdapter provides a standardized interface for integrating different LLM p
 
 *Prebuilt adapters: OpenAIChatCompletions, OpenAIResponses, GoogleGenAiAdapter*
 
-Key responsibilities:
+**Key responsibilities**:
 - Converts standardized inputs into provider-specific API call parameters
 - Parses provider responses back into standardized internal Message objects
 - Formats tool schemas according to each provider's function calling conventions
@@ -257,7 +262,7 @@ BasePatch is the abstract base class that defines how modifications are represen
 
 *Prebuilt patch types: StrPatch, JsonPatch*
 
-Key responsibilities:
+**Key responsibilities**:
 - Defines patch data structure and validation rules
 - Implements content-specific patch application logic
 - Builds lookup maps for efficient content navigation
