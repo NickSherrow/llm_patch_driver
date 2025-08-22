@@ -3,6 +3,7 @@
 from .base_adapter import BaseApiAdapter
 from .openai_adapters import OpenAIChatCompletions, OpenAIResponses
 from .google_adapters import GoogleGenAiAdapter
+from .litellm_adapters import LiteLLMChatCompletions
 from .schemas import ToolCallRequest, ToolCallResponse, Message, ToolSchema
 from .base_tool import LLMTool
 
@@ -11,6 +12,7 @@ __all__ = [
     "OpenAIChatCompletions",
     "OpenAIResponses",
     "GoogleGenAiAdapter",
+    "LiteLLMChatCompletions",
     "ToolCallRequest",
     "ToolCallResponse",
     "Message",
