@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from llm_patch_driver.patch_target.target import PatchTarget
 
- 
-
 string_prompts = PatchPrompts(
     syntax=STR_PATCH_SYNTAX,
     annotation_template=STR_ANNOTATION_TEMPLATE,
@@ -29,7 +27,7 @@ class ReplaceOp(BaseModel):
     replacement: str
 
 class DeleteOp(BaseModel):
-    """Deletion operation – remove the supplied tids."""
+    """Deletion operation - remove the supplied tids."""
 
     type: Literal["delete"] = "delete"
 

@@ -1,6 +1,6 @@
 [project]
 name = "llm-patch-driver"
-version = "0.1.0"
+version = "0.1.2"
 description = "LLM Patch Driver is a framework for patching data objects using LLMs. It can generate and apply a single patch, or start the patching loop to fix complex validation issues."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -25,11 +25,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_patch_driver"]
-
-[tool.hatch.build]
-include = [
-  "src/llm_patch_driver/py.typed",
-]
 
 [dependency-groups]
 dev = [
